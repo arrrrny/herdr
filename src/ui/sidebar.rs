@@ -1206,6 +1206,54 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
     style
 }
 
+/// Render custom badges in the sidebar header row, to the right of the
+/// " spaces" label. Badges come from two best-effort sources merged together:
+/// `run/badge.json` (re-read on every render, never panics) and in-memory
+/// IPC-set badges (`badge.set` JSON-RPC method). In-memory wins on key
+/// conflict. Each badge renders as `[text]` with the badge color applied to
+/// the foreground. Text is truncated if too long.
+fn render_sidebar_header_badges(app: &AppState, frame: &mut Frame, area: Rect) {
+    use crate::badges;
+
+    const HEADER_LABEL_WIDTH: u16 = 7; // " spaces"
+    let badge_area_x = area.x.saturating_add(HEADER_LABEL_WIDTH);
+    let badge_area_width = area.width.saturating_sub(HEADER_LABEL_WIDTH);
+    if badge_area_width == 0 {
+        return;
+    }
+
+    let file_badges = badges::load_file_badges(std::path::Path::new(badges::DEFAULT_BADGE_FILE));
+    let merged = badges::merge_badges(&file_badges, &app.badges);
+    if merged.is_empty() {
+        return;
+    }
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for entry in merged.iter().take(badges::MAX_RENDERED_BADGES) {
+        let text = badges::truncate_text(&entry.badge.text, badges::MAX_BADGE_TEXT_LEN);
+        if text.is_empty() {
+            continue;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::raw("["));
+        spans.push(Span::styled(
+            text,
+            badges::resolve_style(&entry.badge.color),
+        ));
+        spans.push(Span::raw("]"));
+    }
+    if spans.is_empty() {
+        return;
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect::new(badge_area_x, area.y, badge_area_width, 1),
+    );
+}
+
 fn render_workspace_list(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1237,6 +1285,7 @@ fn render_workspace_list(
             )])),
             Rect::new(area.x, area.y, area.width, 1),
         );
+        render_sidebar_header_badges(app, frame, area);
     }
 
     let metrics = workspace_list_scroll_metrics(app, area);

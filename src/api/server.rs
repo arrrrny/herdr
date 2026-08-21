@@ -477,6 +477,9 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PluginPaneOpen(_) => "plugin.pane.open",
         Method::PluginPaneFocus(_) => "plugin.pane.focus",
         Method::PluginPaneClose(_) => "plugin.pane.close",
+        Method::BadgeSet(_) => "badge.set",
+        Method::BadgeClear(_) => "badge.clear",
+        Method::BadgeList(_) => "badge.list",
     }
 }
 
