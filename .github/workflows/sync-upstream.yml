@@ -1,0 +1,71 @@
+# Sync upstream (herdrdev/herdr) changes into development daily.
+#
+# Keeps the fork's development branch up to date with upstream while
+# preserving fork-owned patches — on conflict the fork's own version wins,
+# so customizations on top of upstream survive the sync.
+
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync upstream to development
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/herdrdev/herdr.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Switch to development
+        run: git checkout development || git checkout -b development
+
+      - name: Check if already up to date
+        id: check
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/master)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          if git merge upstream/master --no-edit -m "merge: sync upstream $(date +%Y-%m-%d)"; then
+            echo "Merge succeeded"
+          else
+            echo "Merge conflict — keeping fork changes on conflict"
+            CONFLICTS=$(git diff --name-only --diff-filter=U)
+            for f in $CONFLICTS; do
+              git checkout --ours "$f"
+              git add "$f"
+            done
+            git commit --no-edit -m "merge: sync upstream $(date +%Y-%m-%d) (fork changes kept)"
+          fi
+
+      - name: Push
+        if: steps.check.outputs.up_to_date == 'false'
+        run: git push origin development
