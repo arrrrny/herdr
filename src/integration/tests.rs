@@ -320,6 +320,27 @@ fn command_available_falls_back_to_login_shell_path() {
 }
 
 #[test]
+fn parse_login_shell_path_ignores_stray_startup_stdout() {
+    // Simulate a login shell whose startup files print to stdout (e.g. an
+    // `echo "Welcome!"` in `~/.bash_profile`). The PATH is wrapped between the
+    // markers, so stray output outside them must not corrupt the first entry.
+    let stdout = "Welcome to my machine!\n\
+                  ---HERDR-PATH-BEGIN---/usr/local/bin:/opt/homebrew/bin:/usr/bin\
+                  ---HERDR-PATH-END---\nHave a nice day!\n";
+    let paths = parse_login_shell_path(stdout);
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/bin"),
+        ]
+    );
+    // The first entry must not absorb the stray welcome banner.
+    assert_eq!(paths.first().unwrap(), &PathBuf::from("/usr/local/bin"));
+}
+
+#[test]
 #[cfg(windows)]
 fn command_available_finds_windows_command_shims_on_path() {
     let _lock = integration_env_lock();

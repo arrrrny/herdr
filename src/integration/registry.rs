@@ -146,8 +146,9 @@ pub(crate) fn command_available(command: &str) -> bool {
     // show "not found" in the integrations panel even though
     // `herdr integration status` from a login shell reports them correctly.
     // The login-shell PATH is resolved once and cached for the process
-    // lifetime; resolution spawns the user's login shell with `-lc
-    // 'printf %s "$PATH"'` and parses the colon-separated output.
+    // lifetime; resolution spawns the user's login shell with `-lc` and
+    // parses the colon-separated PATH out of the wrapped stdout (see
+    // `resolve_login_shell_path`).
     command_available_in_login_shell_path(command)
 }
 
@@ -167,9 +168,16 @@ fn login_shell_path() -> &'static std::sync::Mutex<Option<Vec<PathBuf>>> {
 
 fn resolve_login_shell_path() -> Vec<PathBuf> {
     let shell = crate::platform::user_login_shell();
+    // Wrap the PATH value in unique markers. The login shell runs with `-lc`,
+    // so the user's startup files (e.g. `~/.bash_profile`, `~/.zprofile`) are
+    // sourced first and may print to stdout (welcome messages, `echo` banners,
+    // fortune, neofetch, ...). Anything outside the markers is ignored, so it
+    // cannot corrupt the first PATH entry.
+    const BEGIN: &str = "---HERDR-PATH-BEGIN---";
+    const END: &str = "---HERDR-PATH-END---";
     let output = std::process::Command::new(&shell)
         .arg("-lc")
-        .arg("printf '%s' \"$PATH\"")
+        .arg(format!("printf '{BEGIN}%s{END}' \"$PATH\""))
         .output();
     let Ok(output) = output else {
         return Vec::new();
@@ -177,7 +185,25 @@ fn resolve_login_shell_path() -> Vec<PathBuf> {
     if !output.status.success() {
         return Vec::new();
     }
-    String::from_utf8_lossy(&output.stdout)
+    parse_login_shell_path(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the colon-separated login-shell PATH out of the raw stdout captured
+/// between the `BEGIN`/`END` markers that `resolve_login_shell_path` writes
+/// around the PATH value. Stray stdout from the login shell's startup files
+/// lands outside the markers and is ignored, so it cannot corrupt the first
+/// PATH entry.
+pub(crate) fn parse_login_shell_path(stdout: &str) -> Vec<PathBuf> {
+    const BEGIN: &str = "---HERDR-PATH-BEGIN---";
+    const END: &str = "---HERDR-PATH-END---";
+    let Some(start) = stdout.find(BEGIN) else {
+        return Vec::new();
+    };
+    let Some(end_offset) = stdout[start + BEGIN.len()..].find(END) else {
+        return Vec::new();
+    };
+    let end = start + BEGIN.len() + end_offset;
+    stdout[start + BEGIN.len()..end]
         .split(':')
         .filter(|segment| !segment.is_empty())
         .map(PathBuf::from)
