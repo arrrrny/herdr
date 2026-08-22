@@ -995,6 +995,30 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// On macOS, `lsof -t <path>` returns the PIDs of processes that have the file
+/// open. For a Unix domain socket, this is the process that bound it.
+pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .arg("-t")
+        .arg(socket_path)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1403,8 +1403,16 @@ impl HeadlessServer {
                 }
                 Err(restore_err) => {
                     self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+                    // The old server's public sockets were already removed at the
+                    // top of the handoff commit (api_server.remove_socket_file_if_owned)
+                    // and restore just failed, so the old server would survive
+                    // without its status API socket (issue #11). Initiate a full
+                    // graceful shutdown so the server, clients, and sockets all
+                    // terminate cleanly instead of leaving the partial-shutdown
+                    // state that requires a manual kill.
+                    self.initiate_shutdown();
                     return Err(io::Error::other(format!(
-                        "handoff replacement server did not become ready: {err}; old server could not restore public sockets: {restore_err}"
+                        "handoff replacement server did not become ready: {err}; old server could not restore public sockets: {restore_err}; shutdown initiated"
                     )));
                 }
             }
@@ -1420,8 +1428,13 @@ impl HeadlessServer {
                 }
                 Err(restore_err) => {
                     self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+                    // Same partial-shutdown recovery as above: the API socket
+                    // file was already removed and restore failed, so initiate
+                    // a full graceful shutdown to avoid leaving the old server
+                    // alive without its status API socket (issue #11).
+                    self.initiate_shutdown();
                     return Err(io::Error::other(format!(
-                        "handoff replacement server was ready, but commit failed: {err}; old server could not restore public sockets: {restore_err}"
+                        "handoff replacement server was ready, but commit failed: {err}; old server could not restore public sockets: {restore_err}; shutdown initiated"
                     )));
                 }
             }
