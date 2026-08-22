@@ -160,7 +160,7 @@ pub(super) fn wait_for_agent(
             initial,
             last_event_sequence,
             after_state_change_seq: None,
-            accept_transient_status: true,
+            accept_transient_status: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -456,11 +456,6 @@ fn wait_for_resolved_agent(
                 return agent_wait_not_running(request_id)
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
-            }
-            if let Some(status) = matched_event_status {
-                let mut matched = current;
-                matched.agent_status = status;
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
             }
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
