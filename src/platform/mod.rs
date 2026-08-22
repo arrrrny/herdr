@@ -39,6 +39,82 @@ pub(crate) fn apply_pane_runtime_marker(command: &mut portable_pty::CommandBuild
     apply_pane_runtime_marker_platform(command);
 }
 
+/// Resolves the user's preferred login shell binary path so that detached
+/// and pane custom commands can spawn via that shell (with `-l -c`) instead
+/// of a hard-coded `/bin/sh`. This is what makes `type = "shell"` key
+/// commands inherit the user's login-shell environment — including PATH
+/// entries populated by the Homebrew installer in `~/.zprofile` /
+/// `~/.bash_profile` — when herdr is launched under `brew services` /
+/// launchd with a stripped process environment.
+///
+/// Resolution order:
+/// 1. `$SHELL` env var — set by the user's session manager (login, getty,
+///    launchd, systemd --user). Under macOS `brew services` this is
+///    populated by Directory Services from the user's getpwuid record.
+/// 2. `getpwuid_r(getuid())->pw_shell` — the user's configured login shell
+///    in `/etc/passwd` or the OP/LDAP directory. Used when `$SHELL` is unset
+///    (rare but possible in stripped environments).
+/// 3. `/bin/sh` — final fallback preserving previous behavior.
+#[cfg(unix)]
+pub(crate) fn user_login_shell() -> std::path::PathBuf {
+    if let Some(shell) = std::env::var_os("SHELL").filter(|value| !value.is_empty()) {
+        return std::path::PathBuf::from(shell);
+    }
+
+    if let Some(shell) = login_shell_from_passwd() {
+        if !shell.as_os_str().is_empty() {
+            return shell;
+        }
+    }
+
+    std::path::PathBuf::from("/bin/sh")
+}
+
+#[cfg(unix)]
+fn login_shell_from_passwd() -> Option<std::path::PathBuf> {
+    use std::ffi::CStr;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let uid = unsafe { libc::getuid() };
+    // Buffer for the passwd string fields (pw_name, pw_passwd, pw_gecos,
+    // pw_dir, pw_shell). 4 KiB is the historical PATH_MAX / NAME_MAX
+    // envelope for getpwnam_r / getpwuid_r buffers.
+    let mut buf: Vec<libc::c_char> = vec![0; 4096];
+    let mut passwd_storage: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut passwd_ptr: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getpwuid_r(
+            uid,
+            &mut passwd_storage,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut passwd_ptr,
+        )
+    };
+    if rc != 0 || passwd_ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `passwd_ptr` is non-null and points into `passwd_storage`
+    // whose lifetime is bounded by this stack frame. `pw_shell` is a
+    // NUL-terminated C string inside the buffer we provided.
+    let pw_shell_ptr = unsafe { (*passwd_ptr).pw_shell };
+    if pw_shell_ptr.is_null() {
+        return None;
+    }
+    let pw_shell = unsafe { CStr::from_ptr(pw_shell_ptr) };
+    let os_string = OsString::from_vec(pw_shell.to_bytes().to_vec());
+    Some(std::path::PathBuf::from(os_string))
+}
+
+/// Non-Unix stub — detached custom commands on Windows go through
+/// `cmd.exe /d /c` via `detached_custom_command_process_with_comspec`,
+/// which never consults this helper.
+#[cfg(not(unix))]
+pub(crate) fn user_login_shell() -> std::path::PathBuf {
+    std::path::PathBuf::from("/bin/sh")
+}
+
 #[cfg(not(windows))]
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title
@@ -405,25 +481,88 @@ mod tests {
 
     #[test]
     fn detached_custom_command_preserves_unix_login_shell_flag() {
+        // The detached custom command must use the user's login shell with
+        // `-lc` so it inherits the user's login-shell environment (PATH from
+        // Homebrew's `~/.zprofile` / `~/.bash_profile`, etc.) rather than
+        // the bare server-process environment.
+        //
+        // We don't assert the exact shell path (it depends on $SHELL /
+        // getpwuid), only the login-shell flag and the command payload.
         let cmd = detached_custom_command_process("echo hello");
-        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
+        let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(
-            cmd.get_args().collect::<Vec<_>>(),
+            args,
             [
                 std::ffi::OsStr::new("-lc"),
                 std::ffi::OsStr::new("echo hello")
-            ]
+            ],
+            "detached custom command must use the login-shell -lc form"
+        );
+        assert!(
+            !cmd.get_program().is_empty(),
+            "detached custom command must resolve a login shell binary"
         );
     }
 
     #[test]
     fn pane_custom_command_builder_preserves_unix_shell_flag() {
-        let expected: Vec<std::ffi::OsString> =
-            vec!["/bin/sh".into(), "-c".into(), "echo hello".into()];
+        // Pane custom commands now also use the user's login shell with
+        // `-lc` so popup and overlay pane commands inherit the same
+        // login-shell environment as detached `type = "shell"` commands.
+        let builder = pane_custom_command_pty_builder("echo hello");
+        let argv: Vec<std::ffi::OsString> = builder.get_argv().to_vec();
         assert_eq!(
-            pane_custom_command_pty_builder("echo hello").get_argv(),
-            &expected
+            argv.len(),
+            3,
+            "pane custom command builder must produce [shell, -lc, cmd]; got {argv:?}"
         );
+        assert!(
+            !argv[0].is_empty(),
+            "pane custom command builder must resolve a login shell binary"
+        );
+        assert_eq!(
+            argv[1].to_string_lossy(),
+            "-lc",
+            "pane custom command builder must include the login-shell flag; got argv={argv:?}"
+        );
+        assert_eq!(
+            argv[2].to_string_lossy(),
+            "echo hello",
+            "pane custom command builder must preserve the command payload; got argv={argv:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_login_shell_prefers_shell_env_var() {
+        let original = std::env::var_os("SHELL");
+        std::env::set_var("SHELL", "/bin/bash");
+        let shell = user_login_shell();
+        assert_eq!(shell, std::path::PathBuf::from("/bin/bash"));
+        match original {
+            Some(value) => std::env::set_var("SHELL", value),
+            None => std::env::remove_var("SHELL"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_login_shell_falls_back_to_passwd_when_shell_unset() {
+        let original = std::env::var_os("SHELL");
+        std::env::remove_var("SHELL");
+        // getpwuid_r(getuid()) should always succeed on a sane Unix box and
+        // return a non-empty shell path (typically /bin/sh, /bin/bash, or
+        // /bin/zsh). The fallback to /bin/sh only triggers if both SHELL
+        // and the passwd database fail to resolve.
+        let shell = user_login_shell();
+        assert!(
+            !shell.as_os_str().is_empty(),
+            "user_login_shell must always return a non-empty path"
+        );
+        match original {
+            Some(value) => std::env::set_var("SHELL", value),
+            None => std::env::remove_var("SHELL"),
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

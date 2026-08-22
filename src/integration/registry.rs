@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::env::*;
 
@@ -126,14 +127,89 @@ pub(crate) fn integration_target_install_layout_available(
 }
 
 pub(crate) fn command_available(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
+    // First, probe the current process's PATH. This matches the historical
+    // behavior and is what tests rely on (they set PATH to a temp dir).
+    if let Some(paths) = std::env::var_os("PATH") {
+        if std::env::split_paths(&paths).any(|dir| {
+            command_path_candidates(&dir, command)
+                .into_iter()
+                .any(|path| executable_file_exists(&path))
+        }) {
+            return true;
+        }
+    }
+
+    // Fall back to the user's login-shell PATH. This is the fix for the
+    // related instance of arrrrny/herdr#4 / herdrdev/herdr#2960: when
+    // herdr runs under `brew services` / launchd, the server's PATH is
+    // the bare launchd default (no `/opt/homebrew/bin`), so installed CLIs
+    // show "not found" in the integrations panel even though
+    // `herdr integration status` from a login shell reports them correctly.
+    // The login-shell PATH is resolved once and cached for the process
+    // lifetime; resolution spawns the user's login shell with `-lc
+    // 'printf %s "$PATH"'` and parses the colon-separated output.
+    command_available_in_login_shell_path(command)
+}
+
+/// Cached user-login-shell PATH (colon-separated, split into dirs).
+///
+/// `None` (the initial state) means "not yet resolved"; the first call to
+/// `command_available_in_login_shell_path` resolves it via
+/// `resolve_login_shell_path` and stores `Some(paths)`. Tests can override
+/// the cached value via `set_login_shell_path_override_for_test` so the
+/// fallback reflects the test's expected state instead of the dev machine's
+/// real login shell.
+static LOGIN_SHELL_PATH: OnceLock<std::sync::Mutex<Option<Vec<PathBuf>>>> = OnceLock::new();
+
+fn login_shell_path() -> &'static std::sync::Mutex<Option<Vec<PathBuf>>> {
+    LOGIN_SHELL_PATH.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn resolve_login_shell_path() -> Vec<PathBuf> {
+    let shell = crate::platform::user_login_shell();
+    let output = std::process::Command::new(&shell)
+        .arg("-lc")
+        .arg("printf '%s' \"$PATH\"")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
     };
-    std::env::split_paths(&paths).any(|dir| {
-        command_path_candidates(&dir, command)
-            .into_iter()
-            .any(|path| executable_file_exists(&path))
-    })
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split(':')
+        .filter(|segment| !segment.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn command_available_in_login_shell_path(command: &str) -> bool {
+    let mut guard = login_shell_path().lock().expect("login shell path lock poisoned");
+    if guard.is_none() {
+        *guard = Some(resolve_login_shell_path());
+    }
+    guard
+        .as_ref()
+        .map(|paths| {
+            paths.iter().any(|dir| {
+                command_path_candidates(dir, command)
+                    .into_iter()
+                    .any(|path| executable_file_exists(&path))
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Test seam: override the cached login-shell PATH so the next call to
+/// `command_available` consults `paths` instead of resolving the real
+/// login-shell PATH. Pass `None` to force lazy re-resolution on next
+/// access; pass `Some(Vec::new())` to disable the fallback entirely.
+#[cfg(test)]
+pub(crate) fn set_login_shell_path_override_for_test(paths: Option<Vec<PathBuf>>) {
+    *login_shell_path()
+        .lock()
+        .expect("login shell path lock poisoned") = paths;
 }
 
 pub(crate) fn command_path_candidates(dir: &Path, command: &str) -> Vec<PathBuf> {

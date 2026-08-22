@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- `type = "shell"`, `type = "pane"`, and `type = "popup"` custom command keybindings now spawn through the user's login shell with `-lc` on macOS and Linux (resolving `$SHELL`, then `getpwuid_r(getuid())->pw_shell`, then `/bin/sh`) instead of a hard-coded `/bin/sh -lc`. This makes the bindings inherit the user's login-shell PATH — including Homebrew's `/opt/homebrew/bin` set up via `eval "$(/opt/homebrew/bin/brew shellenv)"` in `~/.zprofile` / `~/.bash_profile` — when Herdr is launched under `brew services` / launchd with a stripped process environment. Previously, bindings like `command = "herdr agent focus atlas"` died silently with `command not found` because the launchd PATH lacked `/opt/homebrew/bin`. Spawn and exec failures are now also surfaced line-by-line in the Herdr server log via `tracing::warn!` (with the originating PID and command string) instead of being discarded by `Stdio::null()` on stderr. The integrations panel's `command_available` probe now falls back to the user's login-shell PATH when the current process PATH doesn't find the binary, so installed CLIs show as available even when the server runs under launchd. (#4, mirror of upstream herdrdev/herdr#2960)
+
 ## [0.8.2] - 2026-08-19
 
 ### Added
