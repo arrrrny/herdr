@@ -2671,6 +2671,61 @@ mod tests {
     }
 
     #[test]
+    fn hermes_tui_resume_session_persists_across_restart() {
+        // Regression for fork issue #12: a Hermes /resume inside a TUI pane
+        // only surfaces the new session id through pre_llm_call ("resume"
+        // source). The report must replace the previously persisted session so
+        // a restart resumes the newly selected conversation, not the old one.
+        let mut terminal = test_terminal();
+        terminal.detected_agent = Some(crate::detect::Agent::Hermes);
+        terminal.recent_agent_process_exit = None;
+
+        let session_a = crate::agent_resume::AgentSessionRef::id("A").unwrap();
+        let first = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            Some(session_a.clone()),
+            Some(1),
+            Some("startup".into()),
+        );
+        assert!(first.is_some());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.clone()),
+            Some("A".to_string())
+        );
+
+        let session_b = crate::agent_resume::AgentSessionRef::id("B").unwrap();
+        let second = terminal.set_agent_session_ref_for_session_start(
+            "herdr:hermes".into(),
+            "hermes".into(),
+            Some(session_b.clone()),
+            Some(2),
+            Some("resume".into()),
+        );
+        assert!(second.is_some_and(|mutation| mutation.session_ref_changed));
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.clone()),
+            Some("B".to_string())
+        );
+
+        assert_eq!(
+            terminal.current_session_identity_for_persistence(),
+            Some((
+                "herdr:hermes".to_string(),
+                "hermes".to_string(),
+                crate::agent_resume::AgentSessionRefKind::Id,
+                "B".to_string(),
+            ))
+        );
+    }
+
+    #[test]
     fn pi_session_replacement_reports_reanchor_full_lifecycle_authority() {
         for reason in ["new", "resume", "fork"] {
             let mut terminal = test_terminal();
