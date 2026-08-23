@@ -10,6 +10,20 @@ use std::time::{Duration, Instant};
 use crate::detect::{Agent, AgentState};
 use crate::terminal::TerminalId;
 
+/// How long a full lifecycle-hook authority may remain "live" without a
+/// fresh hook report before herdr falls back to screen-derived state.
+///
+/// Full lifecycle hook integrations (e.g. the kimi CLI) are hook-authoritative
+/// while live: herdr skips screen-based detection and trusts the last reported
+/// hook state. An idle-but-alive process emits no new hook event, so without a
+/// staleness bound the effective state would freeze at the last hook report
+/// (e.g. `Working`) indefinitely — headless consumers (task pools, monitoring)
+/// could not see `Idle`/`Blocked` without a client attaching. Once the authority
+/// is stale, screen detection is allowed to refresh `fallback_state` and the
+/// effective state arbitration prefers it over the stale hook report.
+/// See issue arrrrny/herdr#1.
+pub(crate) const FULL_LIFECYCLE_HOOK_STALE_THRESHOLD: Duration = Duration::from_secs(120);
+
 #[path = "metadata.rs"]
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
@@ -191,9 +205,9 @@ impl TerminalState {
         agent: Agent,
         now: Instant,
     ) -> TerminalStateMutation {
-        let starts_acquisition = !self
-            .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
-            && !self.detected_state_observed_before_release_suppression(Some(agent), now);
+        let starts_acquisition =
+            !self.should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false, now)
+                && !self.detected_state_observed_before_release_suppression(Some(agent), now);
         let mutation = self.set_detected_state_with_screen_signals_at(
             Some(agent),
             AgentState::Unknown,
@@ -339,7 +353,7 @@ impl TerminalState {
         let agent_released = process_exited
             && !newer_custom_authority
             && (previous_agent_label.is_some() || self.agent_name.is_some());
-        if self.should_ignore_detected_state_under_full_lifecycle_hook(agent, process_exited) {
+        if self.should_ignore_detected_state_under_full_lifecycle_hook(agent, process_exited, now) {
             if self
                 .hook_authority
                 .as_ref()
@@ -775,8 +789,9 @@ impl TerminalState {
         &self,
         detected_agent: Option<Agent>,
         process_exited: bool,
+        now: Instant,
     ) -> bool {
-        self.live_full_lifecycle_hook_authority()
+        self.live_full_lifecycle_hook_authority_fresh(now)
             && !process_exited
             && !self.hook_authority_conflicts_with_detected_agent(detected_agent)
     }
@@ -1809,6 +1824,23 @@ impl TerminalState {
             })
     }
 
+    /// True when the hook authority has not reported a fresh event for at least
+    /// `FULL_LIFECYCLE_HOOK_STALE_THRESHOLD`. Headless consumers rely on this to
+    /// surface idle/blocked states for lifecycle-hooked agents that are alive
+    /// but quiet at the prompt. See issue arrrrny/herdr#1.
+    fn hook_authority_is_stale(&self, now: Instant) -> bool {
+        self.hook_authority.as_ref().is_some_and(|authority| {
+            now.duration_since(authority.reported_at) >= FULL_LIFECYCLE_HOOK_STALE_THRESHOLD
+        })
+    }
+
+    /// Like `live_full_lifecycle_hook_authority` but additionally requires the
+    /// authority to be fresh. Used by state-arbitration paths that must let
+    /// screen-derived state take over once the hook goes stale.
+    fn live_full_lifecycle_hook_authority_fresh(&self, now: Instant) -> bool {
+        self.live_full_lifecycle_hook_authority() && !self.hook_authority_is_stale(now)
+    }
+
     pub fn effective_agent_label(&self) -> Option<&str> {
         self.hook_authority
             .as_ref()
@@ -1848,8 +1880,8 @@ impl TerminalState {
         self.live_full_lifecycle_hook_authority()
     }
 
-    fn visible_blocker_overrides_hook(&self) -> bool {
-        if self.live_full_lifecycle_hook_authority() {
+    fn visible_blocker_overrides_hook(&self, now: Instant) -> bool {
+        if self.live_full_lifecycle_hook_authority_fresh(now) {
             return false;
         }
         self.fallback_visible_blocker
@@ -2154,12 +2186,15 @@ impl TerminalState {
         previous_presentation: EffectivePresentation,
         now: Instant,
     ) -> Option<EffectiveStateChange> {
-        let state = if self.visible_blocker_overrides_hook() {
+        let state = if self.visible_blocker_overrides_hook(now) {
             AgentState::Blocked
         } else {
             self.hook_authority
                 .as_ref()
-                .filter(|authority| self.hook_authority_is_effective(authority))
+                .filter(|authority| {
+                    self.hook_authority_is_effective(authority)
+                        && !self.hook_authority_is_stale(now)
+                })
                 .map(|authority| authority.state)
                 .unwrap_or(self.fallback_state)
         };
@@ -4012,6 +4047,108 @@ mod tests {
         assert_eq!(terminal.fallback_state, AgentState::Idle);
         assert_eq!(terminal.state, AgentState::Working);
         assert!(change.effective_state_change.is_none());
+    }
+
+    #[test]
+    fn full_lifecycle_hook_authority_fresh_keeps_screen_state_ignored() {
+        // While the hook authority is fresh (reported within the staleness
+        // threshold), screen-derived state must NOT override the hook report:
+        // the hook remains authoritative. This is the existing contract.
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::Pi,
+            "herdr:pi",
+            "pi",
+            crate::agent_resume::AgentSessionRef::path(test_session_path("fresh.jsonl")).unwrap(),
+        );
+        terminal.set_hook_authority_at(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            None,
+            None,
+            now,
+        );
+
+        // Screen reports Idle one second later (well within the threshold).
+        let change = terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            now + Duration::from_secs(1),
+        );
+
+        assert!(terminal.hook_authority.is_some());
+        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(
+            terminal.state,
+            AgentState::Working,
+            "fresh hook authority must remain authoritative"
+        );
+        assert!(change.effective_state_change.is_none());
+    }
+
+    #[test]
+    fn full_lifecycle_hook_authority_stale_falls_back_to_screen_state() {
+        // Regression for issue arrrrny/herdr#1: when the kimi (full lifecycle
+        // hook authority) is alive but idle at the prompt, no new hook event
+        // fires. Without a staleness bound, `herdr agent list` would keep
+        // reporting the last hook state (e.g. Working) indefinitely. Once the
+        // hook authority is older than FULL_LIFECYCLE_HOOK_STALE_THRESHOLD,
+        // screen-derived state must take over so headless consumers see the
+        // actual idle/blocked status without a client attaching.
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        anchor_full_lifecycle_session(
+            &mut terminal,
+            Agent::Pi,
+            "herdr:pi",
+            "pi",
+            crate::agent_resume::AgentSessionRef::path(test_session_path("stale.jsonl")).unwrap(),
+        );
+        terminal.set_hook_authority_at(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            None,
+            None,
+            now,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+
+        // Advance past the staleness threshold. Screen now reports Idle
+        // (the kimi is sitting at its prompt, emitting no hook events).
+        let stale = now + FULL_LIFECYCLE_HOOK_STALE_THRESHOLD + Duration::from_secs(1);
+        let change = terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Pi),
+            AgentState::Idle,
+            false,
+            true,
+            false,
+            false,
+            stale,
+        );
+
+        assert!(
+            terminal.hook_authority.is_some(),
+            "stale authority is not cleared; it merely defers to screen state"
+        );
+        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(
+            terminal.state,
+            AgentState::Idle,
+            "stale hook authority must defer to screen-derived fallback"
+        );
+        assert!(change.effective_state_change.is_some());
     }
 
     #[test]
