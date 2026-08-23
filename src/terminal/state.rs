@@ -1680,7 +1680,14 @@ impl TerminalState {
 
     fn accept_hook_report(&mut self, source: &str, seq: Option<u64>) -> bool {
         let Some(seq) = seq else {
-            return !self.hook_report_sequences.contains_key(source);
+            // An unsequenced report represents the agent's current state and is
+            // authoritative in real time. Accept it without establishing a
+            // numeric sequence baseline, so a later sequenced (or unsequenced)
+            // report still orders correctly. Previously an unsequenced report
+            // was rejected once any sequence had been recorded for the source,
+            // which silently dropped state-lowering reports (e.g. working ->
+            // idle) from callers that do not send --seq. See issue arrrrny/herdr#9.
+            return true;
         };
 
         if self
@@ -2375,6 +2382,72 @@ mod tests {
         assert_eq!(terminal.fallback_state, AgentState::Idle);
         assert_eq!(terminal.effective_agent_label(), Some("pi"));
         assert_eq!(terminal.state, AgentState::Working);
+    }
+
+    #[test]
+    fn report_lower_state_with_explicit_seq_lowers_effective_state() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        let session_ref = crate::agent_resume::AgentSessionRef::id("pi-root").unwrap();
+        terminal.set_agent_session_ref_for_session_start(
+            "herdr:pi".into(),
+            "pi".into(),
+            Some(session_ref.clone()),
+            Some(1),
+            Some("startup".into()),
+        );
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            Some(session_ref.clone()),
+            Some(2),
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Idle,
+            None,
+            Some(session_ref.clone()),
+            Some(3),
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
+    }
+
+    #[test]
+    fn report_lower_state_without_seq_lowers_effective_state() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        let session_ref = crate::agent_resume::AgentSessionRef::id("pi-root").unwrap();
+        terminal.set_agent_session_ref_for_session_start(
+            "herdr:pi".into(),
+            "pi".into(),
+            Some(session_ref.clone()),
+            Some(1),
+            Some("startup".into()),
+        );
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            Some(session_ref.clone()),
+            Some(2),
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+        // A later report without --seq (the common forklift/kimi push) must still
+        // lower the effective state.
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Idle,
+            None,
+            Some(session_ref.clone()),
+            None,
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
     }
 
     #[test]
