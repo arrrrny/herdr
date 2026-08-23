@@ -7855,6 +7855,11 @@
         },
         "PaneProcessInfo": {
           "properties": {
+            "busy": {
+              "default": false,
+              "description": "Agent-integration-independent busy signal: a foreground process other than\nthe interactive shell is present on the pane's pty. `false` means only the\nshell is running (idle).",
+              "type": "boolean"
+            },
             "foreground_process_group_id": {
               "format": "uint32",
               "minimum": 0,
