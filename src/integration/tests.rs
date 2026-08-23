@@ -4233,3 +4233,53 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
 }
+
+#[test]
+fn combined_login_shell_path_prepends_login_entries_to_inherited() {
+    let login = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    let combined = combined_login_shell_path(&login, Some(std::ffi::OsStr::new("/usr/bin:/bin")));
+    assert_eq!(
+        combined.as_deref(),
+        Some("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    );
+}
+
+#[test]
+fn combined_login_shell_path_without_inherited_returns_login_entries_only() {
+    let login = vec![PathBuf::from("/opt/homebrew/bin")];
+    assert_eq!(
+        combined_login_shell_path(&login, None).as_deref(),
+        Some("/opt/homebrew/bin")
+    );
+    // An empty inherited PATH behaves like an absent one (no trailing colon).
+    assert_eq!(
+        combined_login_shell_path(&login, Some(std::ffi::OsStr::new(""))).as_deref(),
+        Some("/opt/homebrew/bin")
+    );
+}
+
+#[test]
+fn combined_login_shell_path_empty_login_entries_is_none() {
+    // Nothing to prepend — callers leave PATH untouched.
+    assert_eq!(
+        combined_login_shell_path(&[], Some(std::ffi::OsStr::new("/usr/bin"))),
+        None
+    );
+    assert_eq!(combined_login_shell_path(&[], None), None);
+}
+
+#[test]
+fn combined_login_shell_path_round_trips_parse_login_shell_path() {
+    // The resolver extracts entries from the marker-wrapped login-shell
+    // stdout; the combiner must accept exactly that shape.
+    let stdout = "---HERDR-PATH-BEGIN---/opt/homebrew/bin:/usr/local/bin---HERDR-PATH-END---";
+    let login = parse_login_shell_path(stdout);
+    let combined = combined_login_shell_path(&login, Some(std::ffi::OsStr::new("/usr/bin")));
+    assert_eq!(
+        combined.as_deref(),
+        Some("/opt/homebrew/bin:/usr/local/bin:/usr/bin")
+    );
+}

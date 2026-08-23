@@ -211,20 +211,55 @@ pub(crate) fn parse_login_shell_path(stdout: &str) -> Vec<PathBuf> {
 }
 
 fn command_available_in_login_shell_path(command: &str) -> bool {
-    let mut guard = login_shell_path().lock().expect("login shell path lock poisoned");
+    cached_login_shell_path().iter().any(|dir| {
+        command_path_candidates(dir, command)
+            .into_iter()
+            .any(|path| executable_file_exists(&path))
+    })
+}
+
+/// The user's login-shell PATH entries, resolved once and cached for the
+/// process lifetime (see [`resolve_login_shell_path`] for the marker-based
+/// extraction). Empty when the login shell cannot be probed.
+///
+/// Callers beyond the integration registry consume this too: detached
+/// `type = "shell"` custom commands prepend these entries to their `PATH`
+/// so bindings work under a `brew services` / launchd server whose own
+/// environment carries only the bare system PATH (herdrdev/herdr#2960).
+pub(crate) fn cached_login_shell_path() -> Vec<PathBuf> {
+    let mut guard = login_shell_path()
+        .lock()
+        .expect("login shell path lock poisoned");
     if guard.is_none() {
         *guard = Some(resolve_login_shell_path());
     }
-    guard
-        .as_ref()
-        .map(|paths| {
-            paths.iter().any(|dir| {
-                command_path_candidates(dir, command)
-                    .into_iter()
-                    .any(|path| executable_file_exists(&path))
-            })
-        })
-        .unwrap_or(false)
+    guard.clone().unwrap_or_default()
+}
+
+/// Combines login-shell PATH entries with the inherited `PATH` value,
+/// login entries first, so user-installed binaries win while everything
+/// that resolved before still resolves. Returns `None` when there is
+/// nothing to prepend (empty login entries) — callers then leave `PATH`
+/// untouched.
+pub(crate) fn combined_login_shell_path(
+    login_entries: &[PathBuf],
+    inherited: Option<&std::ffi::OsStr>,
+) -> Option<String> {
+    if login_entries.is_empty() {
+        return None;
+    }
+    let combined = login_entries
+        .iter()
+        .map(|dir| dir.display().to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+    let inherited = inherited
+        .map(|value| value.to_string_lossy().into_owned())
+        .filter(|value| !value.is_empty());
+    Some(match inherited {
+        Some(inherited) => format!("{combined}:{inherited}"),
+        None => combined,
+    })
 }
 
 /// Test seam: override the cached login-shell PATH so the next call to
