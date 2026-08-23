@@ -1689,6 +1689,41 @@
           ],
           "type": "object"
         },
+        "BadgeClearParams": {
+          "description": "`badge.clear` — remove a single badge by key. No-op if the key is not\npresent (returns success either way).",
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        },
+        "BadgeSetParams": {
+          "description": "`badge.set` — set or replace a badge by key. Setting the same key again\nreplaces the previous badge. Multiple distinct keys stack.",
+          "properties": {
+            "color": {
+              "description": "Any color string accepted by herdr's color parser: hex (`#rrggbb`,\n`#rgb`), `rgb(r,g,b)`, named colors, or `reset`/`default`/`none`.",
+              "type": "string"
+            },
+            "key": {
+              "description": "Stable identifier for this badge. Replaces any existing badge with\nthe same key. Non-empty.",
+              "type": "string"
+            },
+            "text": {
+              "description": "Arbitrary text to render. Truncated for display if too long.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "text",
+            "color"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleSetParams": {
           "properties": {
             "title": {
@@ -5882,6 +5917,54 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/BadgeSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/BadgeClearParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -6336,6 +6419,26 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "BadgeInfo": {
+          "description": "`badge.list` — return all currently-set in-memory (IPC-set) badges.\nFile-sourced badges from `run/badge.json` are NOT included here; they\nare read fresh on every render and merged with these at display time.",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "text",
+            "color"
+          ],
+          "type": "object"
         },
         "ClientWindowTitleReason": {
           "enum": [
@@ -9791,6 +9894,69 @@
               },
               "required": [
                 "type"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "badges": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/BadgeInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "badge_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "badges"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "color": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "badge_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "key",
+                "text",
+                "color"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "existed": {
+                  "type": "boolean"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "badge_clear",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "key",
+                "existed"
               ],
               "type": "object"
             }
