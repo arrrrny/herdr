@@ -629,6 +629,17 @@ fn pane_command() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("wait")
+                .about("Wait for a pane to become idle (no foreground process)")
+                .arg(required("pane_id", "PANE_ID"))
+                .arg(
+                    flag("idle")
+                        .required(true)
+                        .help("Wait until only the shell is running, confirmed across two ~1s idle samples"),
+                )
+                .arg(option("timeout", "MS").help("Fail after this many milliseconds")),
+        )
+        .subcommand(
             Command::new("run")
                 .about("Run a command in a pane")
                 .arg(required("pane_id", "PANE_ID"))
@@ -1266,6 +1277,9 @@ mod tests {
         assert!(pane
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait-output"));
+        assert!(pane
+            .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "wait"));
     }
 
     #[test]
