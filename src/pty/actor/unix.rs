@@ -19,6 +19,16 @@ const ACTOR_IDLE_POLL_MS: i32 = 1000;
 const ACTOR_COMMAND_BUFFER: usize = 1024;
 const HANDOFF_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
+// BSD/Darwin line discipline keeps at most `TTYHOG` (1024) bytes queued for the
+// child. `ttyinput` discards the whole pending input queue once a single write
+// pushes it past that bound, so a large one-shot write to the master silently
+// loses everything after the first 1024 bytes instead of short-writing. Feeding
+// the master in sub-TTYHOG slices keeps the kernel's own EWOULDBLOCK
+// backpressure intact: the poll loop then waits for write readiness (i.e. for
+// the child to drain) and resumes at `current_write_offset`, so long injected
+// input such as `agent start` command lines arrives complete.
+const PTY_WRITE_CHUNK_BYTES: usize = 512;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActorState {
     Running,
@@ -719,7 +729,8 @@ impl PtyIoActorRunner {
 
     fn flush_pending_writes_once(&mut self) {
         while let Some(bytes) = self.pending_writes.front() {
-            let chunk = &bytes[self.current_write_offset..];
+            let remaining = &bytes[self.current_write_offset..];
+            let chunk = &remaining[..remaining.len().min(PTY_WRITE_CHUNK_BYTES)];
             match self.file.write(chunk) {
                 Ok(0) => {
                     warn!(pane = self.pane_id, "PTY actor write returned zero bytes");
@@ -1446,6 +1457,122 @@ mod tests {
             .expect("queued write reaches peer before quiesce ack");
         assert_eq!(&buf, b"queued-before-ack");
         assert_eq!(runner.state, ActorState::Quiesced);
+    }
+
+    fn actor_runner_over_datagram_pair() -> (PtyIoActorRunner, std::os::unix::net::UnixDatagram) {
+        let (actor_socket, peer) =
+            std::os::unix::net::UnixDatagram::pair().expect("datagram pair");
+        actor_socket
+            .set_nonblocking(true)
+            .expect("actor socket nonblocking");
+        peer.set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("peer timeout");
+        let (_data_tx, data_rx) = mpsc::channel(ACTOR_COMMAND_BUFFER);
+        let (_control_tx, control_rx) = std_mpsc::channel();
+        let runner = PtyIoActorRunner {
+            pane_id: 1,
+            file: std::fs::File::from(unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) }),
+            data_rx,
+            control_rx,
+            state: ActorState::Running,
+            pending_writes: VecDeque::new(),
+            current_write_offset: 0,
+            wake_read_fd: fd::create_wake_pipe().expect("wake pipe").read_fd,
+            controls: Arc::new(Mutex::new(SharedPtyControls::default())),
+            response_order: Arc::new(Mutex::new(())),
+            on_read: Box::new(|_| PtyReadResult::empty()),
+            on_reader_exit: None,
+            poll_observer: None,
+        };
+        (runner, peer)
+    }
+
+    /// Regression guard for issue #3: injected input longer than the BSD/Darwin
+    /// `TTYHOG` bound (1024) must reach the child in full. A datagram pair makes
+    /// every `write` syscall observable as one message, so this also pins the
+    /// per-write slice below that bound.
+    #[test]
+    fn large_user_input_is_written_in_sub_ttyhog_chunks_without_truncation() {
+        const TTYHOG: usize = 1024;
+        const _: () = assert!(
+            PTY_WRITE_CHUNK_BYTES < TTYHOG,
+            "each pty write must stay under the BSD/Darwin tty input queue bound"
+        );
+        let (mut runner, peer) = actor_runner_over_datagram_pair();
+        let payload: Vec<u8> = (0..5000u32).map(|index| (index % 251) as u8).collect();
+        assert!(payload.len() > TTYHOG);
+
+        runner.enqueue_write(Bytes::from(payload.clone()));
+        runner.flush_pending_writes_once();
+
+        assert!(
+            runner.pending_writes.is_empty(),
+            "the whole payload should have been handed to the fd"
+        );
+
+        let mut received = Vec::new();
+        let mut buf = vec![0u8; 8192];
+        while received.len() < payload.len() {
+            let read = peer.recv(&mut buf).expect("peer receives chunk");
+            assert!(
+                read <= PTY_WRITE_CHUNK_BYTES,
+                "each write must stay within one chunk, got {read}"
+            );
+            received.extend_from_slice(&buf[..read]);
+        }
+
+        assert_eq!(
+            received, payload,
+            "injected input must arrive complete and in order, not truncated at 1024 bytes"
+        );
+    }
+
+    /// Chunking must not lose the tail when the fd applies backpressure midway:
+    /// `current_write_offset` has to resume exactly where the short write stopped.
+    #[test]
+    fn chunked_user_input_resumes_after_backpressure() {
+        let (mut runner, mut peer) = actor_runner_for_unit_test();
+
+        let fill = [0xAAu8; 8192];
+        let mut prefilled = 0usize;
+        loop {
+            match runner.file.write(&fill) {
+                Ok(written) => prefilled += written,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(err) => panic!("failed to fill actor write buffer: {err}"),
+            }
+        }
+        assert!(prefilled > 0, "actor write buffer should accept some bytes");
+
+        let payload: Vec<u8> = (0..4096u32).map(|index| (index % 97) as u8 + 1).collect();
+        runner.enqueue_write(Bytes::from(payload.clone()));
+        runner.flush_pending_writes_once();
+        assert!(
+            !runner.pending_writes.is_empty(),
+            "a backpressured payload must stay queued instead of being dropped"
+        );
+
+        let mut received = Vec::new();
+        let mut buf = vec![0u8; 8192];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while received.len() < prefilled + payload.len() {
+            assert!(Instant::now() < deadline, "timed out draining pty writes");
+            match peer.read(&mut buf) {
+                Ok(0) => panic!("peer closed early"),
+                Ok(read) => received.extend_from_slice(&buf[..read]),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => panic!("peer read failed: {err}"),
+            }
+            runner.flush_pending_writes_once();
+        }
+
+        assert!(runner.pending_writes.is_empty());
+        assert_eq!(runner.current_write_offset, 0);
+        assert_eq!(
+            &received[prefilled..],
+            payload.as_slice(),
+            "the payload must resume exactly after the short write"
+        );
     }
 
     #[test]
