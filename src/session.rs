@@ -375,6 +375,19 @@ fn try_recover_partial_shutdown(
         std::thread::sleep(STOP_WAIT_POLL.min(time_until(deadline)));
     }
 
+    // If the server is still listening after the deadline, recovery failed: it
+    // ignored SIGTERM and survives. Don't remove the socket files — the server
+    // is still running, and removing them would let the caller's
+    // `wait_until_stopped_until` falsely conclude the server stopped. Report
+    // the real failure so the outer timeout path surfaces the error.
+    //
+    // We check socket liveness rather than `process_exists(pid)` because a
+    // cleanly-exited child may linger as a zombie (not yet reaped) and would
+    // otherwise be mistaken for a surviving server.
+    if stopped_socket_paths.iter().any(|path| is_running_at(path)) {
+        return Ok(false);
+    }
+
     // Clean up any leftover socket files. The server should have removed them
     // on graceful exit, but if it was killed mid-shutdown they may remain.
     for path in stopped_socket_paths {
@@ -856,6 +869,98 @@ while True:
         // Sockets should be cleaned up.
         assert!(!client_socket.exists() || !is_running_at(&client_socket));
         let _ = std::fs::remove_file(&api_socket);
+        let _ = std::fs::remove_file(&client_socket);
+    }
+
+    /// Regression test for the kimi.ai review finding on PR #19:
+    /// `try_recover_partial_shutdown` must NOT report success (or remove the
+    /// socket files) when the signaled process ignores SIGTERM and survives
+    /// past the deadline. Reporting success there lets the caller's
+    /// `wait_until_stopped_until` falsely believe the server stopped, while
+    /// it is actually still running.
+    #[cfg(unix)]
+    #[test]
+    fn try_recover_partial_shutdown_returns_false_when_process_ignores_sigterm() {
+        use std::process::{Command, Stdio};
+
+        let python = ["python3", "python"]
+            .iter()
+            .find(|cmd| Command::new(cmd).arg("--version").output().is_ok());
+        let Some(python) = python else {
+            // Python isn't installed — skip the integration test rather than fail.
+            eprintln!("try_recover_partial_shutdown_returns_false_when_process_ignores_sigterm: python3 not found, skipping");
+            return;
+        };
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let client_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-ignore-{stamp}-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&client_socket);
+
+        // Child binds the socket and ignores SIGTERM — it survives the signal.
+        let script = format!(
+            r#"
+import os, signal, socket, sys
+path = sys.argv[1]
+if os.path.exists(path):
+    os.unlink(path)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+s.listen(5)
+while True:
+    conn, _ = s.accept()
+    conn.close()
+"#,
+        );
+        let mut child = Command::new(python)
+            .arg("-c")
+            .arg(&script)
+            .arg(client_socket.to_str().unwrap())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn python child");
+
+        // Wait for the child to bind the socket (poll up to 2s).
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < ready_deadline {
+            if is_running_at(&client_socket) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            is_running_at(&client_socket),
+            "child failed to bind client socket"
+        );
+
+        let recovered = try_recover_partial_shutdown(
+            &[client_socket.clone()],
+            Instant::now() + Duration::from_millis(500),
+        )
+        .unwrap();
+
+        // The process survived SIGTERM, so recovery must report failure.
+        assert!(
+            !recovered,
+            "should return false when process ignores SIGTERM"
+        );
+
+        // The socket file must NOT be removed — the server is still running.
+        assert!(
+            client_socket.exists(),
+            "socket file must not be removed when recovery fails"
+        );
+
+        child.kill().expect("kill child");
+        let _ = child.wait();
         let _ = std::fs::remove_file(&client_socket);
     }
 
