@@ -870,6 +870,19 @@ impl App {
             crate::api::SOCKET_PATH_ENV_VAR.to_string(),
             crate::api::socket_path().display().to_string(),
         )];
+        // Prepend the user's login-shell PATH so `type = "shell"` bindings
+        // (and pane/popup commands) resolve user-installed binaries even
+        // when the server itself runs under launchd / `brew services` with
+        // the bare system PATH. The inherited PATH is kept as a suffix so
+        // nothing that resolved before stops resolving. See
+        // herdrdev/herdr#2960 / arrrrny/herdr#12.
+        let login_path = crate::integration::cached_login_shell_path();
+        if let Some(combined) = crate::integration::combined_login_shell_path(
+            &login_path,
+            std::env::var_os("PATH").as_deref(),
+        ) {
+            env.push(("PATH".to_string(), combined));
+        }
         if let Ok(current_exe) = std::env::current_exe() {
             env.push((
                 "HERDR_BIN_PATH".to_string(),
