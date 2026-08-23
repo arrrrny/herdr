@@ -862,6 +862,61 @@ pub(super) fn normalize_pane_id(value: &str) -> String {
     value.to_string()
 }
 
+/// Reads `HERDR_PANE_ID`, returning `None` when unset or empty. External CLI
+/// callers (processes not running inside a managed Herdr pane) have no such
+/// variable, and write commands must not silently resolve `--current` or an
+/// omitted target to the UI-focused pane in that context.
+pub(super) fn caller_pane_id() -> Option<String> {
+    std::env::var("HERDR_PANE_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// Resolve the pane target for a WRITE command that must not silently act on the
+/// human's focused pane when invoked from outside a managed pane.
+///
+/// Selectors (at most one, read from the front of `args`):
+/// - `--pane ID` or a bare positional `ID` => explicit target.
+/// - `--current` => the calling pane from `HERDR_PANE_ID`.
+///
+/// A missing target is only allowed when `HERDR_PANE_ID` is set, in which case
+/// it resolves to the calling pane (equivalent to `--current`). When
+/// `HERDR_PANE_ID` is unset, both `--current` and an omitted target are hard
+/// errors so an external caller must name its target explicitly.
+///
+/// Returns the resolved target pane id and the number of leading args consumed
+/// by the selector (`0` when the target was omitted and resolved from the env).
+pub(super) fn parse_write_pane_target(
+    args: &[String],
+    env_pane_id: Option<&str>,
+) -> Result<(String, usize), String> {
+    match args.first().map(String::as_str) {
+        Some("--current") => {
+            let id = env_pane_id
+                .map(normalize_pane_id)
+                .ok_or("--current requires HERDR_PANE_ID")?;
+            Ok((id, 1))
+        }
+        Some("--pane") => {
+            let Some(value) = args.get(1) else {
+                return Err("missing value for --pane".into());
+            };
+            Ok((normalize_pane_id(value), 2))
+        }
+        Some(first) if first.starts_with("--") => Err(format!("unknown option: {first}")),
+        Some(first) => Ok((normalize_pane_id(first), 1)),
+        None => {
+            let Some(env) = env_pane_id else {
+                return Err(
+                    "write commands require an explicit target (--pane ID|--current); --current requires HERDR_PANE_ID"
+                        .into(),
+                );
+            };
+            Ok((normalize_pane_id(env), 0))
+        }
+    }
+}
+
 pub(super) fn parse_split_direction(value: &str) -> std::io::Result<SplitDirection> {
     match value {
         "right" => Ok(SplitDirection::Right),
