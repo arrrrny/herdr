@@ -160,7 +160,6 @@ pub(super) fn wait_for_agent(
             initial,
             last_event_sequence,
             after_state_change_seq: None,
-            accept_transient_status: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -255,7 +254,6 @@ pub(super) fn prompt_agent(
                 initial,
                 last_event_sequence,
                 after_state_change_seq,
-                accept_transient_status: false,
                 timeout_kind,
             },
             stream,
@@ -287,7 +285,6 @@ pub(super) fn prompt_agent(
             // the activity gate still terminate this settled-state wait.
             last_event_sequence,
             after_state_change_seq,
-            accept_transient_status: false,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
@@ -330,7 +327,6 @@ struct ResolvedAgentWait {
     initial: crate::api::schema::AgentInfo,
     last_event_sequence: u64,
     after_state_change_seq: Option<u64>,
-    accept_transient_status: bool,
     timeout_kind: AgentWaitTimeoutKind,
 }
 
@@ -373,7 +369,6 @@ fn wait_for_resolved_agent(
         }
 
         let mut should_probe = false;
-        let mut matched_event_status = None;
         for (sequence, event) in event_hub.events_after(last_event_sequence) {
             last_event_sequence = sequence;
             match event.data {
@@ -381,37 +376,32 @@ fn wait_for_resolved_agent(
                     pane_id: event_pane,
                     agent,
                     released,
-                    final_status,
                     ..
                 } if event_pane == pane_id => {
                     if released {
-                        if let Some(status) = final_status
-                            .filter(|status| wait.until.contains(status))
-                            .or(matched_event_status)
-                        {
-                            let mut matched = wait.initial.clone();
-                            matched.agent_status = status;
-                            return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
-                        }
+                        // A release (process exit) may come from a child process
+                        // running inside the same pane, not the foreground agent.
+                        // Never resolve the wait on the transient release signal
+                        // alone; only the real, probed terminal state settles it,
+                        // so a child process finishing cannot end the wait early
+                        // (#5).
+                        should_probe = true;
+                    } else if agent.is_some() && expected_agent.is_some() && agent != expected_agent
+                    {
                         return agent_wait_not_running(request_id)
                             .map(AgentWaitOutcome::Response)
                             .map(Some);
+                    } else {
+                        should_probe = true;
                     }
-                    if agent.is_some() && expected_agent.is_some() && agent != expected_agent {
-                        return agent_wait_not_running(request_id)
-                            .map(AgentWaitOutcome::Response)
-                            .map(Some);
-                    }
-                    should_probe = true;
                 }
                 EventData::PaneAgentStatusChanged {
                     pane_id: event_pane,
-                    agent_status,
+                    agent_status: _,
                     ..
                 } if event_pane == pane_id => {
-                    if wait.accept_transient_status && wait.until.contains(&agent_status) {
-                        matched_event_status = Some(agent_status);
-                    }
+                    // Status changes are transient flickers; only the probed
+                    // terminal state settles the wait.
                     should_probe = true;
                 }
                 EventData::PaneUpdated { pane } if pane.pane_id == pane_id => should_probe = true,
@@ -809,5 +799,189 @@ mod tests {
         let unavailable: ErrorResponse = serde_json::from_str(&unavailable).unwrap();
         assert_eq!(unavailable.id, "wait");
         assert_eq!(unavailable.error.code, "server_unavailable");
+    }
+
+    // Regression coverage for #5: `agent wait` must not resolve on a transient
+    // flicker or on a child process finishing in the same pane. It only resolves
+    // on the real, probed terminal state.
+    #[cfg(unix)]
+    mod child_process_regression {
+        use super::*;
+        use crate::api::schema::{AgentInfo, AgentStatus, EventData, EventEnvelope, EventKind};
+        use crate::api::{ApiRequestMessage, EventHub};
+        use crate::ipc::LocalStream;
+        use std::os::unix::net::UnixStream;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        fn make_agent(
+            pane_id: &str,
+            terminal_id: &str,
+            name: Option<&str>,
+            agent: Option<&str>,
+            status: AgentStatus,
+        ) -> AgentInfo {
+            AgentInfo {
+                terminal_id: terminal_id.to_string(),
+                name: name.map(str::to_string),
+                agent: agent.map(str::to_string),
+                title: None,
+                terminal_title: None,
+                terminal_title_stripped: None,
+                display_agent: None,
+                agent_status: status,
+                screen_detection_skipped: false,
+                state_labels: Default::default(),
+                tokens: Default::default(),
+                agent_session: None,
+                workspace_id: "ws".to_string(),
+                tab_id: "tab".to_string(),
+                pane_id: pane_id.to_string(),
+                focused: true,
+                launch_pending: false,
+                interactive_ready: false,
+                state_change_seq: 1,
+                cwd: None,
+                foreground_cwd: None,
+                revision: 1,
+            }
+        }
+
+        /// Spawns a mock agent backend that answers `agent get` with the live
+        /// status shared through `live_status`.
+        fn spawn_agent_mock(
+            initial: &AgentInfo,
+            live_status: Arc<Mutex<AgentStatus>>,
+        ) -> (crate::api::ApiRequestSender, std::thread::JoinHandle<()>) {
+            let (tx, mut rx) =
+                tokio::sync::mpsc::unbounded_channel::<ApiRequestMessage>();
+            let initial = initial.clone();
+            let handle = std::thread::spawn(move || {
+                while let Some(msg) = rx.blocking_recv() {
+                    let status = *live_status.lock().unwrap();
+                    let mut agent = initial.clone();
+                    agent.agent_status = status;
+                    let agent_json = serde_json::to_value(&agent).unwrap();
+                    let response =
+                        serde_json::json!({ "result": { "agent": agent_json } }).to_string();
+                    if msg.respond_to.send(response).is_err() {
+                        break;
+                    }
+                }
+            });
+            (tx, handle)
+        }
+
+        fn open_stream() -> (LocalStream, UnixStream) {
+            let (raw_stream, peer) = UnixStream::pair().unwrap();
+            let inner: interprocess::os::unix::uds_local_socket::Stream = raw_stream.into();
+            (inner.into(), peer)
+        }
+
+        #[test]
+        fn agent_wait_ignores_child_release_flicker() {
+            let event_hub = EventHub::default();
+            let initial = make_agent("pane-1", "term-1", Some("my-pane"), Some("codex"), AgentStatus::Working);
+            let live_status = Arc::new(Mutex::new(AgentStatus::Working));
+            let (api_tx, _mock) = spawn_agent_mock(&initial, live_status);
+            let running = Arc::new(AtomicBool::new(true));
+            let (mut stream, _peer) = open_stream();
+
+            // Baseline before the child-process release event lands.
+            let last_event_sequence = event_hub.current_sequence();
+            // A background child process in the same pane finishes and reports done.
+            event_hub.push(EventEnvelope {
+                event: EventKind::PaneAgentDetected,
+                data: EventData::PaneAgentDetected {
+                    pane_id: "pane-1".to_string(),
+                    workspace_id: "ws".to_string(),
+                    agent: Some("codex".to_string()),
+                    released: true,
+                    final_status: Some(AgentStatus::Done),
+                },
+            });
+
+            let wait = ResolvedAgentWait {
+                target: "my-pane".to_string(),
+                until: vec![AgentStatus::Idle, AgentStatus::Done, AgentStatus::Blocked],
+                timeout_ms: Some(300),
+                initial,
+                last_event_sequence,
+                after_state_change_seq: None,
+                timeout_kind: AgentWaitTimeoutKind::Status,
+            };
+            let outcome = wait_for_resolved_agent(
+                "wait".to_string(),
+                wait,
+                &mut stream,
+                &api_tx,
+                &event_hub,
+                &running,
+            )
+            .unwrap();
+            match outcome {
+                Some(AgentWaitOutcome::Matched(_)) => {
+                    panic!("agent wait must not return early on a child process release");
+                }
+                Some(AgentWaitOutcome::Response(response)) => {
+                    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+                    assert_eq!(value["error"]["code"], "timeout");
+                }
+                None => panic!("agent wait returned None (disconnected) unexpectedly"),
+            }
+        }
+
+        #[test]
+        fn agent_wait_returns_on_real_stable_done() {
+            let event_hub = EventHub::default();
+            let initial = make_agent("pane-1", "term-1", Some("my-pane"), Some("codex"), AgentStatus::Working);
+            let live_status = Arc::new(Mutex::new(AgentStatus::Done));
+            let (api_tx, _mock) = spawn_agent_mock(&initial, live_status);
+            let running = Arc::new(AtomicBool::new(true));
+            let (mut stream, _peer) = open_stream();
+
+            let last_event_sequence = event_hub.current_sequence();
+            // The foreground agent genuinely settles into Done.
+            event_hub.push(EventEnvelope {
+                event: EventKind::PaneAgentStatusChanged,
+                data: EventData::PaneAgentStatusChanged {
+                    pane_id: "pane-1".to_string(),
+                    workspace_id: "ws".to_string(),
+                    agent_status: AgentStatus::Done,
+                    agent: Some("codex".to_string()),
+                    title: None,
+                    display_agent: None,
+                    state_labels: Default::default(),
+                },
+            });
+
+            let wait = ResolvedAgentWait {
+                target: "my-pane".to_string(),
+                until: vec![AgentStatus::Idle, AgentStatus::Done, AgentStatus::Blocked],
+                timeout_ms: Some(300),
+                initial,
+                last_event_sequence,
+                after_state_change_seq: None,
+                timeout_kind: AgentWaitTimeoutKind::Status,
+            };
+            let outcome = wait_for_resolved_agent(
+                "wait".to_string(),
+                wait,
+                &mut stream,
+                &api_tx,
+                &event_hub,
+                &running,
+            )
+            .unwrap();
+            match outcome {
+                Some(AgentWaitOutcome::Matched(agent)) => {
+                    assert_eq!(agent.agent_status, AgentStatus::Done);
+                }
+                Some(AgentWaitOutcome::Response(response)) => {
+                    panic!("expected matched agent, got response: {response}");
+                }
+                None => panic!("agent wait returned None (disconnected) unexpectedly"),
+            }
+        }
     }
 }
