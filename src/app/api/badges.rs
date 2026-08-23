@@ -45,24 +45,17 @@ impl App {
             params.color
         };
 
-        let (key, badge) = crate::api::schema::badge_from_set_params(&BadgeSetParams {
+        let (stored_key, badge) = crate::api::schema::badge_from_set_params(&BadgeSetParams {
             key: key.clone(),
             text: text.clone(),
             color: color.clone(),
         });
-        self.state.badges.set(key, badge);
+        self.state.badges.set(stored_key, badge);
 
         // Re-render is triggered by `request_changes_ui` matching BadgeSet
         // in src/api/mod.rs — no explicit signal needed here.
 
-        encode_success(
-            id,
-            ResponseResult::BadgeSet {
-                key: params.key,
-                text,
-                color,
-            },
-        )
+        encode_success(id, ResponseResult::BadgeSet { key, text, color })
     }
 
     /// `badge.clear` — remove a single badge by key. No-op (still success)
@@ -274,5 +267,45 @@ mod tests {
         let badges = list(&mut app);
         assert_eq!(badges.len(), 1);
         assert_eq!(badges[0].key, "pool");
+    }
+
+    #[test]
+    fn badge_set_response_returns_trimmed_key() {
+        let mut app = test_app();
+        let result = set(&mut app, "  pool  ", "LOCAL", "green");
+        assert!(matches!(
+            result,
+            ResponseResult::BadgeSet { ref key, ref text, ref color }
+                if key == "pool" && text == "LOCAL" && color == "green"
+        ));
+    }
+
+    #[test]
+    fn badge_clear_trims_whitespace_in_key() {
+        let mut app = test_app();
+        set(&mut app, "pool", "LOCAL", "green");
+        let result = clear(&mut app, "  pool  ");
+        assert!(matches!(
+            result,
+            ResponseResult::BadgeClear { ref key, existed: true } if key == "pool"
+        ));
+        assert!(list(&mut app).is_empty());
+    }
+
+    #[test]
+    fn badge_set_rejects_oversized_key() {
+        let mut app = test_app();
+        let huge_key = "x".repeat(128);
+        let response = app.handle_api_request(Request {
+            id: "set".into(),
+            method: Method::BadgeSet(BadgeSetParams {
+                key: huge_key,
+                text: "T".into(),
+                color: "red".into(),
+            }),
+        });
+        let err: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(err.error.code, "invalid_params");
+        assert!(list(&mut app).is_empty());
     }
 }
