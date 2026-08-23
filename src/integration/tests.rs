@@ -268,6 +268,81 @@ fn command_available_requires_executable_file_on_path() {
 }
 
 #[test]
+#[cfg(unix)]
+fn command_available_falls_back_to_login_shell_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let process_bin = base.join("process-bin");
+    let fallback_bin = base.join("fallback-bin");
+    fs::create_dir_all(&process_bin).unwrap();
+    fs::create_dir_all(&fallback_bin).unwrap();
+    // Point the current process PATH at an empty dir so the first probe
+    // finds nothing and the fallback gets a chance to run.
+    let original_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", &process_bin);
+
+    // Place the binary ONLY in the fallback dir, simulating a Homebrew
+    // install dir present in the user's login shell PATH but absent from
+    // the server process's PATH. This forces the first probe to miss and
+    // the login-shell fallback to actually run.
+    let command = fallback_bin.join("codex");
+    fs::write(&command, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Override the login-shell PATH cache so the fallback looks in
+    // `fallback_bin` (absent from the process PATH), exercising the real
+    // fallback path.
+    set_login_shell_path_override_for_test(Some(vec![fallback_bin.clone()]));
+    assert!(
+        command_available("codex"),
+        "command_available should find the binary via the login-shell PATH fallback"
+    );
+
+    // Disable the fallback entirely — now the command should not be found
+    // because the binary is neither in the process PATH nor in the
+    // login-shell fallback.
+    let empty_bin = base.join("empty-bin");
+    fs::create_dir_all(&empty_bin).unwrap();
+    std::env::set_var("PATH", &empty_bin);
+    set_login_shell_path_override_for_test(Some(Vec::new()));
+    assert!(
+        !command_available("codex"),
+        "command_available must not find the binary when both PATH and the login-shell fallback are empty"
+    );
+
+    if let Some(path) = original_path {
+        std::env::set_var("PATH", path);
+    } else {
+        std::env::remove_var("PATH");
+    }
+    set_login_shell_path_override_for_test(None);
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn parse_login_shell_path_ignores_stray_startup_stdout() {
+    // Simulate a login shell whose startup files print to stdout (e.g. an
+    // `echo "Welcome!"` in `~/.bash_profile`). The PATH is wrapped between the
+    // markers, so stray output outside them must not corrupt the first entry.
+    let stdout = "Welcome to my machine!\n\
+                  ---HERDR-PATH-BEGIN---/usr/local/bin:/opt/homebrew/bin:/usr/bin\
+                  ---HERDR-PATH-END---\nHave a nice day!\n";
+    let paths = parse_login_shell_path(stdout);
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/bin"),
+        ]
+    );
+    // The first entry must not absorb the stray welcome banner.
+    assert_eq!(paths.first().unwrap(), &PathBuf::from("/usr/local/bin"));
+}
+
+#[test]
 #[cfg(windows)]
 fn command_available_finds_windows_command_shims_on_path() {
     let _lock = integration_env_lock();

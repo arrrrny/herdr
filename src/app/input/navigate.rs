@@ -917,13 +917,31 @@ impl App {
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            // Capture stderr (instead of discarding it) so spawn/exec
+            // failures are no longer silent. A short-lived reader thread
+            // forwards each line to the server log via `tracing::warn!`.
+            // This is what surfaces the `command not found` ENOENT that
+            // previously made `type = "shell"` bindings look dead when
+            // herdr was launched under `brew services` / launchd with a
+            // stripped PATH — see arrrrny/herdr#4 / herdrdev/herdr#2960.
+            .stderr(Stdio::piped());
         let (env, cwd) = self.custom_command_env();
         command.envs(env);
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
-        let child = command.spawn()?;
+        let mut child = command.spawn()?;
+        // Take the stderr pipe before pushing the child so the reaper's
+        // `try_wait()` doesn't deadlock on a still-open write end.
+        let stderr = child.stderr.take();
+        let pid = child.id();
+        let command_label = binding.command.clone();
+        if let Some(stderr) = stderr {
+            std::thread::Builder::new()
+                .name(format!("herdr-detached-cmd-{pid}"))
+                .spawn(move || forward_detached_command_stderr(stderr, pid, command_label))
+                .ok();
+        }
         self.detached_process_children.push(child);
         Ok(())
     }
@@ -1975,6 +1993,44 @@ fn finish_custom_command_context(
         leave_navigate_mode(state);
     } else {
         finish_action_context(state, context, previous_mode);
+    }
+}
+
+/// Forwards stderr from a detached `type = "shell"` custom command to the
+/// herdr server log via `tracing::warn!`. Runs on a dedicated short-lived
+/// thread so the UI never blocks on pipe reads. Each line is logged with
+/// the originating PID and the user's command string so operators can
+/// correlate "command not found" lines back to the binding that produced
+/// them.
+///
+/// This is the "surface spawn/exec failures" half of the fix for
+/// arrrrny/herdr#4 / herdrdev/herdr#2960: spawn failures are already
+/// surfaced via toast by `launch_custom_command`, but the silent-failure
+/// case (child spawned successfully, then exited non-zero with ENOENT
+/// because the user's PATH lacked the binary) was previously swallowed
+/// by `Stdio::null()` on stderr. With stderr piped into this forwarder,
+/// the failure shows up in the server log line-by-line.
+fn forward_detached_command_stderr(
+    mut stderr: std::process::ChildStderr,
+    pid: u32,
+    command: String,
+) {
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(&mut stderr);
+    for line in reader.lines() {
+        match line {
+            Ok(line) if !line.is_empty() => {
+                tracing::warn!(
+                    pid,
+                    command = %command,
+                    stderr = %line,
+                    "detached custom command stderr"
+                );
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
     }
 }
 

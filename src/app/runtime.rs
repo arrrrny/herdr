@@ -15,7 +15,20 @@ fn retain_detached_process_after_wait(
 ) -> bool {
     match result {
         Ok(None) => true,
-        Ok(Some(_)) => false,
+        Ok(Some(status)) if status.success() => false,
+        Ok(Some(status)) => {
+            // Surface the failure of detached custom commands and URL
+            // openers that previously died silently. The most common case
+            // is `type = "shell"` key bindings whose command wasn't on
+            // the (stripped, launchd-inherited) PATH — exit code 127.
+            // See arrrrny/herdr#4 / herdrdev/herdr#2960.
+            tracing::warn!(
+                pid,
+                code = ?status.code(),
+                "detached child process exited non-zero"
+            );
+            false
+        }
         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => true,
         Err(err) => {
             tracing::warn!(pid, err = %err, "failed to reap detached process");
