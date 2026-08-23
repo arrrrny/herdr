@@ -755,28 +755,33 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
+    let (target, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    let rest = &args[consumed..];
+    let Some(text) = rest.first() else {
         eprintln!(
-            "usage: herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]"
+            "usage: herdr agent prompt [--pane ID|--current] <text> [--wait] [--until STATUS]... [--timeout MS]"
         );
-        return Ok(2);
-    };
-    let Some(text) = args.get(1) else {
-        eprintln!("agent prompt requires text");
         return Ok(2);
     };
     let mut wait = false;
     let mut until = Vec::new();
     let mut timeout_ms = None;
-    let mut index = 2;
-    while index < args.len() {
-        match args[index].as_str() {
+    let mut index = 1;
+    while index < rest.len() {
+        match rest[index].as_str() {
             "--wait" => {
                 wait = true;
                 index += 1;
             }
             "--until" => {
-                let Some(value) = args.get(index + 1) else {
+                let Some(value) = rest.get(index + 1) else {
                     eprintln!("--until requires at least one status");
                     return Ok(2);
                 };
@@ -791,7 +796,7 @@ fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
                 index += 2;
             }
             "--timeout" => {
-                let Some(value) = args.get(index + 1) else {
+                let Some(value) = rest.get(index + 1) else {
                     eprintln!("missing value for --timeout");
                     return Ok(2);
                 };
@@ -827,16 +832,25 @@ fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn agent_send_keys(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr agent send-keys <target> <key> [key ...]");
+    let (target, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        eprintln!("usage: herdr agent send-keys [--pane ID|--current] <key> [key ...]");
         return Ok(2);
     }
 
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:send-keys".into(),
         method: Method::AgentSendKeys(AgentSendKeysParams {
-            target: args[0].clone(),
-            keys: args[1..].to_vec(),
+            target: target.clone(),
+            keys: rest.to_vec(),
         }),
     })?)
 }
@@ -910,8 +924,8 @@ fn print_agent_help() {
     eprintln!("  herdr agent list");
     eprintln!("  herdr agent get <target>");
     eprintln!("  herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  herdr agent send-keys <target> <key> [key ...]");
-    eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
+    eprintln!("  herdr agent send-keys [--pane ID|--current] <key> [key ...]");
+    eprintln!("  herdr agent prompt [--pane ID|--current] <text> [--wait] [--until STATUS]... [--timeout MS]");
     eprintln!("  herdr agent rename <target> <name>|--clear");
     eprintln!("  herdr agent focus <target>");
     eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
@@ -932,4 +946,62 @@ fn parse_timeout(value: &str) -> Result<u64, i32> {
         eprintln!("{err}");
         2
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    // `agent prompt --current` must be a hard error when the caller is not
+    // inside a managed pane, and must resolve to the calling pane otherwise.
+    #[test]
+    fn agent_prompt_current_requires_env_unset() {
+        assert!(
+            super::super::parse_write_pane_target(&args(&["--current"]), None).is_err(),
+            "agent prompt --current must error without HERDR_PANE_ID"
+        );
+    }
+
+    #[test]
+    fn agent_prompt_current_resolves_to_env_when_set() {
+        let (id, consumed) = super::super::parse_write_pane_target(
+            &args(&["--current", "hello", "--wait"]),
+            Some("issue-1:p1"),
+        )
+        .unwrap();
+        assert_eq!(id, "issue-1:p1");
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn agent_prompt_omitted_requires_env_unset() {
+        assert!(
+            super::super::parse_write_pane_target(&args(&[]), None).is_err(),
+            "agent prompt with omitted target must error without HERDR_PANE_ID"
+        );
+    }
+
+    // `agent send-keys --current` shares the same safe-external behavior.
+    #[test]
+    fn agent_send_keys_current_requires_env_unset() {
+        assert!(
+            super::super::parse_write_pane_target(&args(&["--current"]), None).is_err(),
+            "agent send-keys --current must error without HERDR_PANE_ID"
+        );
+    }
+
+    #[test]
+    fn agent_send_keys_current_resolves_to_env_when_set() {
+        let (id, consumed) = super::super::parse_write_pane_target(
+            &args(&["--current", "Enter"]),
+            Some("issue-1:p1"),
+        )
+        .unwrap();
+        assert_eq!(id, "issue-1:p1");
+        assert_eq!(consumed, 1);
+    }
 }
