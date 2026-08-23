@@ -71,7 +71,7 @@ Set the executable Herdr uses for newly created interactive panes:
 default_shell = "nu"
 ```
 
-When unset or empty, Herdr uses `$SHELL`, then `/bin/sh` on Unix and PowerShell on Windows. This is an executable name or path, not a shell command line. Existing panes keep their current shell until they are recreated. Custom command keybinding strings run through `/bin/sh -c` for pane commands and `/bin/sh -lc` for detached commands on Unix; on Windows they run through `cmd.exe /d /c`.
+When unset or empty, Herdr uses `$SHELL`, then `/bin/sh` on Unix and PowerShell on Windows. This is an executable name or path, not a shell command line. Existing panes keep their current shell until they are recreated. Custom command keybinding strings run through the user's login shell (`$SHELL`, then `getpwuid`, then `/bin/sh`) with `-lc` on Unix so they inherit the user's login-shell PATH setup; on Windows they run through `cmd.exe /d /c`.
 
 Set how Herdr starts newly created interactive pane shells:
 
@@ -80,7 +80,9 @@ Set how Herdr starts newly created interactive pane shells:
 shell_mode = "auto"
 ```
 
-`shell_mode = "auto"` starts login shells on macOS so login-only PATH setup such as `/usr/libexec/path_helper` and Homebrew shell initialization runs in new panes. On other platforms, it keeps the existing non-login shell behavior. Use `"login"` to force login-shell startup or `"non_login"` to force non-login startup. Command panes, detached custom command keybindings, and explicit argv launches keep their existing command execution paths.
+`shell_mode = "auto"` starts login shells on macOS so login-only PATH setup such as `/usr/libexec/path_helper` and Homebrew shell initialization runs in new panes. On other platforms, it keeps the existing non-login shell behavior. Use `"login"` to force login-shell startup or `"non_login"` to force non-login startup. Command panes and explicit argv launches keep their existing command execution paths.
+
+Detached custom command keybindings (`type = "shell"`) and popup/pane custom command keybindings (`type = "popup"`, `type = "pane"`) spawn through the user's login shell with `-lc` on macOS and Linux so they inherit the same login-shell PATH setup as interactive panes (Homebrew's `~/.zprofile` / `~/.bash_profile`, `/usr/libexec/path_helper`, etc.). This is what makes bindings like `command = "herdr agent focus atlas"` work when Herdr is launched under `brew services` / launchd with a stripped process PATH. Spawn and exec failures (e.g. command not found in the resolved PATH) are now surfaced line-by-line in the Herdr server log instead of being silently discarded.
 
 Set the working directory policy for new panes, tabs, and workspaces:
 
