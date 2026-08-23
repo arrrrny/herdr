@@ -1967,6 +1967,20 @@ pub fn process_exists(pid: u32) -> bool {
     ok && exit_code == STILL_ACTIVE
 }
 
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// Windows uses named pipes rather than Unix domain sockets for the herdr
+/// server, and named-pipe ownership lookup requires server-side APIs not
+/// available from a client process. Returns `None`; the fallback SIGTERM path
+/// in `stop_socket_with_timeout` is a no-op on Windows and the user gets the
+/// existing "server is not running" error message.
+pub fn find_unix_socket_owner_pid(_socket_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
 pub fn write_clipboard(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
