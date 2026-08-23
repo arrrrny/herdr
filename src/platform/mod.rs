@@ -456,6 +456,11 @@ impl PrefixInputSource for RealPrefixInputSource {
 mod tests {
     use super::*;
 
+    // `user_login_shell` tests mutate the process-global `SHELL` env var.
+    // Serialize them so parallel test runs don't race on the shared state.
+    #[cfg(unix)]
+    static SHELL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {
         watch_terminal_resize_signal();
@@ -535,6 +540,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn user_login_shell_prefers_shell_env_var() {
+        let _guard = SHELL_TEST_LOCK.lock().unwrap();
         let original = std::env::var_os("SHELL");
         std::env::set_var("SHELL", "/bin/bash");
         let shell = user_login_shell();
@@ -548,6 +554,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn user_login_shell_falls_back_to_passwd_when_shell_unset() {
+        let _guard = SHELL_TEST_LOCK.lock().unwrap();
         let original = std::env::var_os("SHELL");
         std::env::remove_var("SHELL");
         // getpwuid_r(getuid()) should always succeed on a sane Unix box and

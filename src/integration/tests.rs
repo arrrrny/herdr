@@ -274,33 +274,35 @@ fn command_available_falls_back_to_login_shell_path() {
 
     let _lock = integration_env_lock();
     let base = unique_base();
-    let bin = base.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    // Point the current process PATH at the empty dir so the first probe
-    // finds nothing and the fallback gets a chance to run. The fallback
-    // is configured to look at this same bin dir, simulating "the user's
-    // login shell has /opt/homebrew/bin in PATH but the server process
-    // does not".
+    let process_bin = base.join("process-bin");
+    let fallback_bin = base.join("fallback-bin");
+    fs::create_dir_all(&process_bin).unwrap();
+    fs::create_dir_all(&fallback_bin).unwrap();
+    // Point the current process PATH at an empty dir so the first probe
+    // finds nothing and the fallback gets a chance to run.
     let original_path = std::env::var_os("PATH");
-    std::env::set_var("PATH", &bin);
+    std::env::set_var("PATH", &process_bin);
 
-    let command = bin.join("codex");
+    // Place the binary ONLY in the fallback dir, simulating a Homebrew
+    // install dir present in the user's login shell PATH but absent from
+    // the server process's PATH. This forces the first probe to miss and
+    // the login-shell fallback to actually run.
+    let command = fallback_bin.join("codex");
     fs::write(&command, "#!/bin/sh\n").unwrap();
     fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
 
-    // Override the login-shell PATH cache so the fallback looks in `bin`
-    // (simulating a Homebrew install dir present in the user's login
-    // shell PATH but absent from the server process's PATH).
-    set_login_shell_path_override_for_test(Some(vec![bin.clone()]));
+    // Override the login-shell PATH cache so the fallback looks in
+    // `fallback_bin` (absent from the process PATH), exercising the real
+    // fallback path.
+    set_login_shell_path_override_for_test(Some(vec![fallback_bin.clone()]));
     assert!(
         command_available("codex"),
         "command_available should find the binary via the login-shell PATH fallback"
     );
 
     // Disable the fallback entirely — now the command should not be found
-    // because the only PATH entry is `bin` and that probe already failed
-    // (it didn't fail; we put the binary there). To test the "no fallback"
-    // path properly, point PATH at an empty dir.
+    // because the binary is neither in the process PATH nor in the
+    // login-shell fallback.
     let empty_bin = base.join("empty-bin");
     fs::create_dir_all(&empty_bin).unwrap();
     std::env::set_var("PATH", &empty_bin);
