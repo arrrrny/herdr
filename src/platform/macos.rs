@@ -594,11 +594,12 @@ fn unique_timestamp_nanos() -> u128 {
 /// When `click_target` is `Some(public_pane_id)` (the canonical pane id of the
 /// form `<workspace_id>:p<encoded>`), a marker file is written at
 /// `<config_dir>/notification_click_target.json` and the terminal-notifier
-/// command is given `-execute file://<current_exe>` so that clicking the
-/// notification's "Show" action launches the herdr binary. The fresh binary
-/// detects the click-handler launch (no args + no TTY on stdin + a fresh
-/// marker file) and dispatches a `pane.focus` API request to the running TUI,
-/// which calls `focus_pane_in_workspace`. See `cli::notification_click`.
+/// command is given `-execute <current_exe>` so that clicking the
+/// notification's "Show" action runs the herdr binary as a shell command. The
+/// fresh binary detects the click-handler launch (no args + no TTY on stdin +
+/// a fresh marker file) and dispatches a `pane.focus` API request to the
+/// running TUI, which calls `focus_pane_in_workspace`. See
+/// `cli::notification_click`.
 pub fn show_desktop_notification(
     title: &str,
     body: Option<&str>,
@@ -667,16 +668,19 @@ fn build_terminal_notifier_command(
         // Persist the click target so the launched binary can pick it up.
         // Best-effort: a failed write must not block the notification itself.
         let _ = write_notification_click_target(target);
-        // terminal-notifier's `-execute` is invoked via NSWorkspace openURL
-        // when the user clicks the notification. We point it at this binary
-        // so the click-handler heuristic in `cli::notification_click` runs.
+        // terminal-notifier runs `-execute` as a shell command (via
+        // `/bin/sh -c`) when the user clicks the notification. Point it
+        // directly at this binary so the click-handler heuristic in
+        // `cli::notification_click` runs: launching herdr with no args and no
+        // controlling TTY is exactly what `handle_if_click_launch` detects,
+        // and it then dispatches a `pane.focus` request to the running TUI.
+        // A `file://` URL does NOT work here — the shell would try to run the
+        // URL string as a command and fail silently.
         if let Some(binary_path) = std::env::current_exe()
             .ok()
-            .filter(|path| path.as_os_str().len() > 0)
+            .filter(|path| !path.as_os_str().is_empty())
         {
-            if let Some(url) = file_url_for_path(&binary_path) {
-                cmd.arg("-execute").arg(url);
-            }
+            cmd.arg("-execute").arg(binary_path);
         }
     }
 }
@@ -713,41 +717,6 @@ fn format_notification_click_target_json(public_pane_id: &str, written_at_ms: u1
         pane_id = serde_json::to_string(public_pane_id).unwrap_or_else(|_| "".into()),
         ts = written_at_ms
     )
-}
-
-/// Builds a `file://` URL for a path. macOS `openURL:` accepts this form.
-fn file_url_for_path(path: &Path) -> Option<String> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir().ok()?.join(path)
-    };
-    let mut url = String::from("file://");
-    for component in absolute.components() {
-        use std::path::Component;
-        match component {
-            Component::RootDir => {}
-            Component::Normal(segment) => {
-                url.push('/');
-                url.push_str(&percent_encode_path_segment(segment.as_ref()));
-            }
-            _ => return None,
-        }
-    }
-    Some(url)
-}
-
-fn percent_encode_path_segment(segment: &std::ffi::OsStr) -> String {
-    let bytes = segment.as_bytes();
-    let mut out = String::with_capacity(bytes.len());
-    for &byte in bytes {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{:02X}", byte));
-        }
-    }
-    out
 }
 
 fn show_osascript_notification(
@@ -1132,6 +1101,12 @@ pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global `XDG_CONFIG_HOME` env var so
+    /// they don't clobber each other when the suite runs in parallel
+    /// (cargo/nextest run tests concurrently by default).
+    static XDG_CONFIG_HOME_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn nofile_target_raises_low_soft_limit_to_cap_when_hard_is_unlimited() {
@@ -1375,6 +1350,7 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
     fn notification_click_target_path_lives_in_config_dir() {
         // Use a temp XDG_CONFIG_HOME so we don't pollute the user's real
         // config dir during tests.
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
         let sandbox = std::env::temp_dir().join(format!(
             "herdr-macos-notif-target-path-{}-{}",
             std::process::id(),
@@ -1399,6 +1375,7 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
 
     #[test]
     fn build_terminal_notifier_command_writes_marker_and_execute_when_target_given() {
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
         let sandbox = std::env::temp_dir().join(format!(
             "herdr-macos-notif-write-{}-{}",
             std::process::id(),
@@ -1443,18 +1420,17 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
             .iter()
             .position(|arg| arg == "-execute")
             .expect("command should include -execute");
-        let url = &args[execute_idx + 1];
+        let binary_path = &args[execute_idx + 1];
+        // `-execute` must carry the bare herdr binary path (resolved from
+        // current_exe), not a `file://` URL — terminal-notifier runs the value
+        // as a shell command, so a `file://` URL would fail silently.
         assert!(
-            url.starts_with("file://"),
-            "execute URL should be a file:// URL: {url}"
+            !binary_path.starts_with("file://"),
+            "execute must be a plain path, not a file:// URL: {binary_path}"
         );
-        // The URL must point at the running herdr binary (resolved from
-        // current_exe). We can't predict the exact path in tests, but it must
-        // be non-trivial and the executable file must exist.
-        let binary_path = url.strip_prefix("file://").unwrap();
         assert!(
             std::path::Path::new(&binary_path).exists(),
-            "execute URL must point at a real file: {binary_path}"
+            "execute path must point at a real file: {binary_path}"
         );
     }
 
@@ -1479,17 +1455,52 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
     }
 
     #[test]
-    fn file_url_for_path_percent_encodes_segments() {
-        let path = std::path::Path::new("/tmp/a b/c%d");
-        let url = file_url_for_path(path).expect("file url should be built");
-        assert_eq!(url, "file:///tmp/a%20b/c%25d");
-    }
-
-    #[test]
-    fn file_url_for_path_handles_unicode_bytes() {
-        // é in UTF-8 is 0xC3 0xA9.
-        let path = std::path::Path::new("/tmp/café");
-        let url = file_url_for_path(path).expect("file url should be built");
-        assert_eq!(url, "file:///tmp/caf%C3%A9");
+    fn build_terminal_notifier_command_execute_is_plain_path_not_file_url() {
+        // Regression guard: `-execute` must be the bare binary path so the
+        // shell can launch it. A `file://` URL would be passed verbatim to
+        // `/bin/sh -c` and fail silently (see arrrrny/herdr#27 / #32).
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
+        // Route the sidecar marker into a temp dir so the test doesn't leave
+        // a stale marker in the user's real config dir.
+        let sandbox = std::env::temp_dir().join(format!(
+            "herdr-macos-notif-execute-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &sandbox);
+        let mut cmd = Command::new("terminal-notifier");
+        build_terminal_notifier_command(
+            &mut cmd,
+            "title",
+            Some("body"),
+            Some("com.mitchellh.ghostty"),
+            Some("wA:pB"),
+        );
+        match prev {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let execute_idx = args
+            .iter()
+            .position(|arg| arg == "-execute")
+            .expect("command should include -execute");
+        let value = &args[execute_idx + 1];
+        assert!(
+            !value.starts_with("file://"),
+            "-execute must be a plain path, got: {value}"
+        );
+        assert!(
+            std::path::Path::new(value).exists(),
+            "-execute must point at a real file: {value}"
+        );
     }
 }
