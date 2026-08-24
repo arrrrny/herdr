@@ -2087,7 +2087,7 @@ fn handle_notify_with_notifiers(
     body: Option<&str>,
     sound_config: &crate::config::SoundConfig,
     mut show_terminal_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
-    mut show_system_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
+    mut show_system_notification: impl FnMut(&str, Option<&str>, Option<&str>) -> io::Result<bool>,
 ) {
     match kind {
         NotifyKind::Sound => {
@@ -2116,7 +2116,10 @@ fn handle_notify_with_notifiers(
                 message = message,
                 "received system toast notification from server"
             );
-            if let Err(err) = show_system_notification(message, body) {
+            // The client-side notification path has no pane target; pass
+            // None so the macOS click-handler skips dispatching a
+            // `pane.focus` request for these notifications.
+            if let Err(err) = show_system_notification(message, body, None) {
                 warn!(err = %err, "failed to emit system notification");
             }
         }
@@ -3493,7 +3496,7 @@ mod tests {
                 emitted = Some((title.to_string(), body.map(str::to_string)));
                 Ok(true)
             },
-            |_, _| Ok(false),
+            |_, _, _| Ok(false),
         );
 
         assert_eq!(
@@ -3513,7 +3516,7 @@ mod tests {
             Some("workspace 1"),
             &sound_config,
             |_, _| Ok(false),
-            |title, body| {
+            |title, body, _| {
                 emitted = Some((title.to_string(), body.map(str::to_string)));
                 Ok(true)
             },
@@ -3536,7 +3539,7 @@ mod tests {
             Some("api workspace"),
             &sound_config,
             |_, _| Ok(false),
-            |title, body| {
+            |title, body, _| {
                 emitted = Some((title.to_string(), body.map(str::to_string)));
                 Ok(true)
             },

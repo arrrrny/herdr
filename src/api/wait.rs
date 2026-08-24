@@ -853,8 +853,7 @@ mod tests {
             initial: &AgentInfo,
             live_status: Arc<Mutex<AgentStatus>>,
         ) -> (crate::api::ApiRequestSender, std::thread::JoinHandle<()>) {
-            let (tx, mut rx) =
-                tokio::sync::mpsc::unbounded_channel::<ApiRequestMessage>();
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ApiRequestMessage>();
             let initial = initial.clone();
             let handle = std::thread::spawn(move || {
                 while let Some(msg) = rx.blocking_recv() {
@@ -881,7 +880,13 @@ mod tests {
         #[test]
         fn agent_wait_ignores_child_release_flicker() {
             let event_hub = EventHub::default();
-            let initial = make_agent("pane-1", "term-1", Some("my-pane"), Some("codex"), AgentStatus::Working);
+            let initial = make_agent(
+                "pane-1",
+                "term-1",
+                Some("my-pane"),
+                Some("codex"),
+                AgentStatus::Working,
+            );
             let live_status = Arc::new(Mutex::new(AgentStatus::Working));
             let (api_tx, _mock) = spawn_agent_mock(&initial, live_status);
             let running = Arc::new(AtomicBool::new(true));
@@ -934,7 +939,13 @@ mod tests {
         #[test]
         fn agent_wait_returns_on_real_stable_done() {
             let event_hub = EventHub::default();
-            let initial = make_agent("pane-1", "term-1", Some("my-pane"), Some("codex"), AgentStatus::Working);
+            let initial = make_agent(
+                "pane-1",
+                "term-1",
+                Some("my-pane"),
+                Some("codex"),
+                AgentStatus::Working,
+            );
             let live_status = Arc::new(Mutex::new(AgentStatus::Done));
             let (api_tx, _mock) = spawn_agent_mock(&initial, live_status);
             let running = Arc::new(AtomicBool::new(true));

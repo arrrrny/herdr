@@ -1460,8 +1460,7 @@ mod tests {
     }
 
     fn actor_runner_over_datagram_pair() -> (PtyIoActorRunner, std::os::unix::net::UnixDatagram) {
-        let (actor_socket, peer) =
-            std::os::unix::net::UnixDatagram::pair().expect("datagram pair");
+        let (actor_socket, peer) = std::os::unix::net::UnixDatagram::pair().expect("datagram pair");
         actor_socket
             .set_nonblocking(true)
             .expect("actor socket nonblocking");
