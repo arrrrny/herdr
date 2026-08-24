@@ -1,7 +1,7 @@
 //! Hidden macOS system-notification click handler.
 //!
 //! When `ui.toast.delivery = "system"` is set on macOS, `terminal-notifier`
-//! is invoked with `-execute file://<herdr_binary>` and a sidecar marker
+//! is invoked with `-execute <herdr_binary>` and a sidecar marker
 //! file at `<config_dir>/notification_click_target.json` containing the
 //! public pane id of the originating pane (see `src/platform/macos.rs`).
 //!
