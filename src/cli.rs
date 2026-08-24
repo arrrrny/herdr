@@ -28,6 +28,7 @@ mod completion;
 mod integration;
 mod machine;
 mod notification;
+mod notification_click;
 mod pane;
 mod plugin;
 mod protocol_guard;
@@ -94,6 +95,17 @@ pub(super) fn print_read_response(response: &serde_json::Value) -> std::io::Resu
 }
 
 pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+    // Hidden: terminal-notifier's `-execute file://<herdr>` launches a fresh
+    // herdr binary with no args and no TTY on stdin when the user clicks a
+    // macOS system notification's "Show" action. Detect this via the marker
+    // file written by `src/platform/macos.rs::show_desktop_notification`
+    // and dispatch a `pane.focus` API request to the running TUI before any
+    // TUI/CLI dispatch runs. See `cli::notification_click` and
+    // arrrrny/herdr#27.
+    if let Some(code) = notification_click::handle_if_click_launch()? {
+        return Ok(CommandOutcome::Handled(code));
+    }
+
     let Some(command) = args.get(1).map(|arg| arg.as_str()) else {
         return Ok(CommandOutcome::NotCli);
     };

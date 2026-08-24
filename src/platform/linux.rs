@@ -90,7 +90,11 @@ fn process_detection_mode() -> ProcessDetectionMode {
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec![super::user_login_shell().into_os_string(), flag.into(), command.into()]
+    vec![
+        super::user_login_shell().into_os_string(),
+        flag.into(),
+        command.into(),
+    ]
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -697,7 +701,16 @@ fn bytes_match_image_signature(extension: &str, bytes: &[u8]) -> bool {
 }
 
 /// Show a native desktop notification through libnotify's command-line helper.
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+///
+/// `click_target` is currently ignored on Linux — `notify-send` does not
+/// support a click-back channel that fits the FreeDesktop notification spec
+/// without registering an action server. The macOS implementation in
+/// `src/platform/macos.rs` wires the click via terminal-notifier's `-execute`.
+pub fn show_desktop_notification(
+    title: &str,
+    body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     show_desktop_notification_with_command(title, body, |program| Command::new(program))
 }
 

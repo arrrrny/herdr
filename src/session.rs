@@ -341,9 +341,7 @@ fn try_recover_partial_shutdown(
     deadline: Instant,
 ) -> Result<bool, String> {
     // Find any socket that's still alive (server is listening on it).
-    let live_socket = stopped_socket_paths
-        .iter()
-        .find(|path| is_running_at(path));
+    let live_socket = stopped_socket_paths.iter().find(|path| is_running_at(path));
     let Some(live_socket) = live_socket else {
         return Ok(false);
     };
