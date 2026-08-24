@@ -661,8 +661,15 @@ fn build_terminal_notifier_command(
 ) {
     cmd.arg("-title").arg(title);
     cmd.arg("-message").arg(body.unwrap_or_default());
+    // When there is a click target we use `-execute` as the click action.
+    // terminal-notifier performs only ONE activation on click, so adding
+    // `-activate` alongside `-execute` makes it focus the terminal and skip
+    // the Herdr launch entirely. Only activate for non-clickable notices.
+    let has_click_target = click_target.is_some();
     if let Some(bundle_id) = activate_bundle_id {
-        cmd.arg("-activate").arg(bundle_id);
+        if !has_click_target {
+            cmd.arg("-activate").arg(bundle_id);
+        }
     }
     if let Some(target) = click_target {
         // Persist the click target so the launched binary can pick it up.
@@ -681,6 +688,9 @@ fn build_terminal_notifier_command(
             .filter(|path| !path.as_os_str().is_empty())
         {
             cmd.arg("-execute").arg(binary_path);
+            eprintln!(
+                "[herdr-notif] system notification shown with click target {target}; -execute set, -activate skipped"
+            );
         }
     }
 }
@@ -1501,6 +1511,14 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
         assert!(
             std::path::Path::new(value).exists(),
             "-execute must point at a real file: {value}"
+        );
+        // A click target must NOT also carry `-activate`: terminal-notifier
+        // performs only one activation per click, so `-activate` would shadow
+        // `-execute` and the Herdr launch (and thus the focus) would never
+        // happen. Regression guard for arrrrny/herdr#27 / #32.
+        assert!(
+            !args.iter().any(|arg| arg == "-activate"),
+            "click target must not also set -activate: {args:?}"
         );
     }
 }

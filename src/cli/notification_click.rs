@@ -17,6 +17,7 @@
 //! primitive the in-app Herdr toast uses — which is the validated
 //! focus-switch primitive identified in arrrrny/herdr#27.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,6 +26,25 @@ use crate::api::schema::{Method, PaneTarget, Request};
 /// Marker file freshness window. A marker older than this is treated as
 /// stale (the notification was probably long-since dismissed).
 const NOTIFICATION_CLICK_TARGET_MAX_AGE: Duration = Duration::from_secs(5 * 60);
+
+/// Append a timestamped line to `<config_dir>/notification_click.log`.
+///
+/// The click-launched binary has no TTY, so this is the only observable
+/// trace of whether a macOS notification click was detected and what it did.
+/// Best-effort: a failed write is silently ignored.
+fn log_click(msg: impl Into<String>) {
+    let msg = msg.into();
+    let path = crate::config::config_dir().join("notification_click.log");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| writeln!(f, "[{ts}] {msg}"));
+}
 
 /// Entry point for the click-launch heuristic.
 ///
@@ -35,9 +55,19 @@ pub(crate) fn handle_if_click_launch() -> std::io::Result<Option<i32>> {
     if !is_click_launch() {
         return Ok(None);
     }
+    log_click("click-launch detected; running handler");
     // Best-effort: never bubble errors into the user's terminal — the
     // click-handler is a background process with no TTY attached.
-    let exit_code = run_click_handler().unwrap_or(1);
+    let exit_code = match run_click_handler() {
+        Ok(code) => {
+            log_click(format!("handler finished exit={code}"));
+            code
+        }
+        Err(err) => {
+            log_click(format!("handler error: {err}"));
+            1
+        }
+    };
     Ok(Some(exit_code))
 }
 
@@ -48,16 +78,20 @@ pub(crate) fn handle_if_click_launch() -> std::io::Result<Option<i32>> {
 fn is_click_launch() -> bool {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 1 {
+        log_click(format!("not click-launch: args.len()={}", args.len()));
         return false;
     }
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
+        log_click("not click-launch: stdin is a TTY");
         return false;
     }
     let Some(path) = click_target_path() else {
+        log_click("not click-launch: no marker path on this platform");
         return false;
     };
     let Ok(metadata) = std::fs::metadata(&path) else {
+        log_click("not click-launch: marker file missing");
         return false;
     };
     let Ok(modified) = metadata.modified() else {
@@ -66,7 +100,12 @@ fn is_click_launch() -> bool {
     let age = std::time::SystemTime::now()
         .duration_since(modified)
         .unwrap_or_default();
-    age <= NOTIFICATION_CLICK_TARGET_MAX_AGE
+    if age > NOTIFICATION_CLICK_TARGET_MAX_AGE {
+        log_click(format!("not click-launch: marker stale {}s", age.as_secs()));
+        return false;
+    }
+    log_click("click-launch checks passed");
+    true
 }
 
 /// Path to the marker file on macOS; `None` on other platforms (no
@@ -93,9 +132,11 @@ fn run_click_handler() -> std::io::Result<i32> {
 
     let pane_id = parse_pane_id_from_marker(&body)?;
     if pane_id.is_empty() {
+        log_click("handler: empty pane_id, skipping");
         return Ok(0);
     }
 
+    log_click(format!("handler: parsed pane_id={pane_id}; sending pane.focus"));
     let request = Request {
         id: "macos-notification-click".into(),
         method: Method::PaneFocus(PaneTarget { pane_id }),
@@ -104,8 +145,14 @@ fn run_click_handler() -> std::io::Result<i32> {
     // since exited), there's nothing useful to print to a non-TTY stdout —
     // exit silently with the underlying error code.
     match super::send_request(&request) {
-        Ok(_) => Ok(0),
-        Err(_) => Ok(1),
+        Ok(_) => {
+            log_click("handler: pane.focus sent OK");
+            Ok(0)
+        }
+        Err(err) => {
+            log_click(format!("handler: pane.focus FAILED: {err}"));
+            Ok(1)
+        }
     }
 }
 
