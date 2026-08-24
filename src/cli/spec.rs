@@ -39,6 +39,7 @@ pub(super) fn command() -> Command {
         .subcommand(notification_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
+        .subcommand(badge_command())
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
@@ -451,6 +452,34 @@ fn agent_command() -> Command {
                         .action(ArgAction::SetTrue),
                 ),
         )
+}
+
+fn badge_command() -> Command {
+    Command::new("badge")
+        .about("Manage custom badges shown in the sidebar header")
+        .subcommand(
+            Command::new("set")
+                .about("Set or replace a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true))
+                .arg(
+                    Arg::new("text")
+                        .long("text")
+                        .value_name("TEXT")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("color")
+                        .long("color")
+                        .value_name("COLOR")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("clear")
+                .about("Remove a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true)),
+        )
+        .subcommand(Command::new("list").about("List in-memory (IPC-set) badges"))
 }
 
 pub(super) fn agent_kind_values() -> Vec<&'static str> {

@@ -46,6 +46,22 @@ herdr api schema --output herdr-api.schema.json
 with the installed binary. Use `--json` for the full JSON Schema document, or
 `--output PATH` to write that document to a file.
 
+## Badges
+
+```bash
+herdr badge set --key KEY --text TEXT --color COLOR
+herdr badge clear --key KEY
+herdr badge list
+```
+
+`herdr badge` surfaces the in-binary custom badge system as a CLI verb. Badges are app-global: each is keyed, so setting the same key replaces the previous badge and multiple distinct keys stack. They render in the sidebar header.
+
+- `herdr badge set --key KEY --text TEXT --color COLOR` sets or replaces the badge for `KEY`. `--text` is the label shown in the sidebar; `--color` is any Herdr color string (hex, `rgb(...)`, a named color, or `reset`).
+- `herdr badge clear --key KEY` removes the badge for `KEY`. Clearing a missing key is a no-op that still succeeds.
+- `herdr badge list` prints the in-memory (IPC-set) badges as JSON. File-sourced badges from `run/badge.json` are not included; they are read fresh on every render.
+
+Each command prints the raw JSON response from the socket API (the same `badge.set`, `badge.clear`, and `badge.list` methods integrations use).
+
 ## Shell completions
 
 ```bash
