@@ -24,9 +24,13 @@ pub(super) fn handle_shell_notification_effects(
                     warn!(err = %err, "failed to emit terminal notification");
                 }
             }
-            shell::ClientShellNotificationEffect::System { title, body } => {
+            shell::ClientShellNotificationEffect::System {
+                title,
+                body,
+                click_target,
+            } => {
                 if let Err(err) =
-                    crate::platform::show_desktop_notification(&title, body.as_deref())
+                    crate::platform::show_desktop_notification(&title, body.as_deref(), click_target.as_deref())
                 {
                     warn!(err = %err, "failed to emit system notification");
                 }
@@ -57,7 +61,7 @@ pub(super) fn handle_notify_with_notifiers(
     body: Option<&str>,
     sound_config: &crate::config::SoundConfig,
     mut show_terminal_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
-    mut show_system_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
+    mut show_system_notification: impl FnMut(&str, Option<&str>, Option<&str>) -> io::Result<bool>,
 ) {
     match kind {
         NotifyKind::Sound => {
@@ -86,7 +90,10 @@ pub(super) fn handle_notify_with_notifiers(
                 message = message,
                 "received system toast notification from server"
             );
-            if let Err(err) = show_system_notification(message, body) {
+            // The legacy flat SystemToast path has no pane target; pass
+            // None so the macOS click-handler skips dispatching a
+            // `pane.focus` request for these notifications.
+            if let Err(err) = show_system_notification(message, body, None) {
                 warn!(err = %err, "failed to emit system notification");
             }
         }
