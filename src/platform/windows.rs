@@ -2002,7 +2002,11 @@ fn clipboard_global_bytes(format: u32, max_bytes: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+pub fn show_desktop_notification(
+    title: &str,
+    body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     let title = title.to_owned();
     let body = body.unwrap_or(&title).to_owned();
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);

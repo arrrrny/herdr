@@ -360,15 +360,21 @@ impl App {
                 crate::config::ToastDelivery::Terminal | crate::config::ToastDelivery::System
             )
         {
-            let notify = match self.state.toast_config.delivery {
-                crate::config::ToastDelivery::Terminal => crate::terminal_notify::show_notification,
-                crate::config::ToastDelivery::System => crate::platform::show_desktop_notification,
-                _ => unreachable!("toast delivery was checked above"),
-            };
+            let delivery = self.state.toast_config.delivery;
 
             if let Some((version, install_command)) = update_ready {
                 let instruction = crate::update::update_install_instruction(&install_command);
-                let _ = notify(&format!("v{version} available"), Some(&instruction));
+                let title = format!("v{version} available");
+                // Update-available notifications carry no pane target.
+                let _ = match delivery {
+                    crate::config::ToastDelivery::Terminal => {
+                        crate::terminal_notify::show_notification(&title, Some(&instruction))
+                    }
+                    crate::config::ToastDelivery::System => {
+                        crate::platform::show_desktop_notification(&title, Some(&instruction), None)
+                    }
+                    _ => Ok(false),
+                };
             } else if self.state.toast_config.delay_seconds == 0 {
                 self.emit_terminal_or_system_agent_notifications(&pane_updates);
             }
@@ -675,11 +681,7 @@ impl App {
             return;
         }
 
-        let notify = match self.state.toast_config.delivery {
-            crate::config::ToastDelivery::Terminal => crate::terminal_notify::show_notification,
-            crate::config::ToastDelivery::System => crate::platform::show_desktop_notification,
-            _ => return,
-        };
+        let delivery = self.state.toast_config.delivery;
 
         for update in pane_updates {
             let is_active_tab = self
@@ -721,15 +723,35 @@ impl App {
             };
             let workspace_label =
                 ws.display_name_from(&self.state.terminals, &self.terminal_runtimes);
-            let _ = notify(
-                &format!("{} {}", agent_label, event_text),
-                Some(&crate::app::actions::notification_context(
-                    ws,
-                    &workspace_label,
-                    update.ws_idx,
-                    update.pane_id,
-                )),
+            let title = format!("{} {}", agent_label, event_text);
+            let body = crate::app::actions::notification_context(
+                ws,
+                &workspace_label,
+                update.ws_idx,
+                update.pane_id,
             );
+            // For System delivery, encode the target pane so the macOS
+            // click-handler (terminal-notifier `-execute`) can dispatch a
+            // `pane.focus` API request to focus the originating pane.
+            // Terminal delivery uses OSC escape sequences which do not
+            // support a click-back channel; the target is left as None.
+            let click_target = match delivery {
+                crate::config::ToastDelivery::System => {
+                    self.public_pane_id(update.ws_idx, update.pane_id)
+                }
+                _ => None,
+            };
+            let _ = match delivery {
+                crate::config::ToastDelivery::Terminal => {
+                    crate::terminal_notify::show_notification(&title, Some(&body))
+                }
+                crate::config::ToastDelivery::System => crate::platform::show_desktop_notification(
+                    &title,
+                    Some(&body),
+                    click_target.as_deref(),
+                ),
+                _ => Ok(false),
+            };
         }
     }
 
@@ -762,17 +784,35 @@ impl App {
             return;
         }
 
-        let notify = match self.state.toast_config.delivery {
-            crate::config::ToastDelivery::Terminal => crate::terminal_notify::show_notification,
-            crate::config::ToastDelivery::System => crate::platform::show_desktop_notification,
-            _ => unreachable!("toast delivery was checked above"),
-        };
+        let delivery_mode = self.state.toast_config.delivery;
 
         for delivery in deliveries {
             let Some(toast) = &delivery.client_notification else {
                 continue;
             };
-            let _ = notify(&toast.title, Some(&toast.context));
+            // Like `emit_terminal_or_system_agent_notifications`, encode the
+            // pane target for System delivery so the macOS click-handler can
+            // dispatch a `pane.focus` API request to the running TUI.
+            let click_target = match delivery_mode {
+                crate::config::ToastDelivery::System => self
+                    .state
+                    .workspaces
+                    .iter()
+                    .position(|ws| ws.id == delivery.workspace_id)
+                    .and_then(|ws_idx| self.public_pane_id(ws_idx, delivery.pane_id)),
+                _ => None,
+            };
+            let _ = match delivery_mode {
+                crate::config::ToastDelivery::Terminal => {
+                    crate::terminal_notify::show_notification(&toast.title, Some(&toast.context))
+                }
+                crate::config::ToastDelivery::System => crate::platform::show_desktop_notification(
+                    &toast.title,
+                    Some(&toast.context),
+                    click_target.as_deref(),
+                ),
+                _ => Ok(false),
+            };
         }
     }
 
@@ -1263,16 +1303,23 @@ impl App {
                 if self.api_notification_rate_limited(Instant::now()) {
                     NotificationShowReason::RateLimited
                 } else {
-                    let notify = match self.state.toast_config.delivery {
+                    // The `notification.show` API has no pane target; pass
+                    // None so the macOS click-handler skips dispatching a
+                    // `pane.focus` request for these notifications.
+                    let result = match self.state.toast_config.delivery {
                         crate::config::ToastDelivery::Terminal => {
-                            crate::terminal_notify::show_notification
+                            crate::terminal_notify::show_notification(&title, body.as_deref())
                         }
                         crate::config::ToastDelivery::System => {
-                            crate::platform::show_desktop_notification
+                            crate::platform::show_desktop_notification(
+                                &title,
+                                body.as_deref(),
+                                None,
+                            )
                         }
                         _ => unreachable!("notification delivery was checked above"),
                     };
-                    match notify(&title, body.as_deref()) {
+                    match result {
                         Ok(true) => {
                             self.mark_api_notification_shown(Instant::now());
                             self.emit_api_notification_sound(requested_sound);
