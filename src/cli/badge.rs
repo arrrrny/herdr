@@ -13,7 +13,7 @@ pub(super) fn run_badge_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "set" => badge_set(&args[1..]),
         "clear" => badge_clear(&args[1..]),
-        "list" => badge_list(),
+        "list" => badge_list(&args[1..]),
         "help" | "--help" | "-h" => {
             print_badge_help();
             Ok(0)
@@ -135,7 +135,11 @@ fn parse_badge_clear_args(args: &[String]) -> Result<String, String> {
     Ok(key)
 }
 
-fn badge_list() -> std::io::Result<i32> {
+fn badge_list(args: &[String]) -> std::io::Result<i32> {
+    if !args.is_empty() {
+        eprintln!("usage: herdr badge list");
+        return Ok(2);
+    }
     super::print_response(&super::send_request(&Request {
         id: "cli:badge:list".into(),
         method: Method::BadgeList(EmptyParams::default()),

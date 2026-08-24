@@ -778,6 +778,25 @@ fn badge_list_sends_badge_list_request() {
 }
 
 #[test]
+fn badge_list_rejects_extra_arguments_locally() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+
+    // `badge list` takes no arguments; a stray arg must be rejected locally
+    // with exit code 2 and never reach the socket.
+    let run = run_cli(&socket_path, &["badge", "list", "unexpected"]);
+    assert_eq!(run.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("usage: herdr badge list"),
+        "stderr: {stderr}"
+    );
+
+    cleanup_test_base(&base);
+}
+
+#[test]
 fn badge_set_rejects_missing_args_locally() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
