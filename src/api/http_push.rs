@@ -17,7 +17,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +44,11 @@ const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cap on simultaneous connection-handler threads. The listener spawns one
+/// thread per connection; bound it so a flood of slow clients cannot exhaust
+/// threads or address space. Excess connections get an immediate 503 and close.
+const MAX_CONCURRENT_CONNECTIONS: usize = 64;
 
 /// Resolve the push listener bind address: `HERDR_API_LISTEN_ADDR` wins over
 /// `[server].agent_push_listen_addr`; an empty value disables the listener.
@@ -117,7 +122,21 @@ pub(crate) struct HttpPushServerHandle {
     running: Arc<AtomicBool>,
     #[cfg_attr(not(test), allow(dead_code))]
     addr: SocketAddr,
+    #[allow(dead_code)]
+    active: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// Decrements the live-connection counter when a connection handler finishes.
+/// Wrapped in an `Arc` so the count survives even if the handler thread panics.
+struct ConnGuard {
+    active: Arc<AtomicUsize>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl HttpPushServerHandle {
@@ -151,39 +170,70 @@ pub(crate) fn start_http_push_server(
     let listener = TcpListener::bind(listen_addr)?;
     let addr = listener.local_addr()?;
     let running = Arc::new(AtomicBool::new(true));
+    let active = Arc::new(AtomicUsize::new(0));
     let thread_running = Arc::clone(&running);
+    let thread_active = Arc::clone(&active);
     let thread = std::thread::Builder::new()
         .name("herdr-http-push".into())
         .spawn(move || {
-            for stream in listener.incoming() {
+            loop {
                 if !thread_running.load(Ordering::Acquire) {
                     break;
                 }
-                match stream {
-                    Ok(stream) => {
-                        let api_tx = api_tx.clone();
-                        std::thread::Builder::new()
-                            .name("herdr-http-push-conn".into())
-                            .spawn(move || {
-                                if let Err(err) = handle_connection(stream, &api_tx) {
-                                    debug!(err = %err, "http push connection failed");
-                                }
-                            })
-                            .ok();
-                    }
+                let stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
                     Err(err) => {
+                        // A transient accept error (e.g. EMFILE, ECONNABORTED)
+                        // must not kill the listener; only stop once shutdown
+                        // has been requested. Re-check running so a self-connect
+                        // unblock from Drop still exits cleanly.
+                        if !thread_running.load(Ordering::Acquire) {
+                            break;
+                        }
                         warn!(err = %err, "http push listener accept failed");
-                        break;
+                        continue;
                     }
+                };
+                if thread_active.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                    warn!(
+                        active = thread_active.load(Ordering::Acquire),
+                        max = MAX_CONCURRENT_CONNECTIONS,
+                        "http push connection limit reached; rejecting"
+                    );
+                    reject_too_busy(stream);
+                    continue;
                 }
+                thread_active.fetch_add(1, Ordering::AcqRel);
+                let guard = ConnGuard {
+                    active: Arc::clone(&thread_active),
+                };
+                let api_tx = api_tx.clone();
+                std::thread::Builder::new()
+                    .name("herdr-http-push-conn".into())
+                    .spawn(move || {
+                        let _guard = guard;
+                        if let Err(err) = handle_connection(stream, &api_tx) {
+                            debug!(err = %err, "http push connection failed");
+                        }
+                    })
+                    .ok();
             }
         })?;
     info!(addr = %addr, "agent push http server listening");
     Ok(HttpPushServerHandle {
         addr,
+        active,
         running,
         thread: Some(thread),
     })
+}
+
+/// Respond to a connection with `503 Service Unavailable` and close it without
+/// reading the request. Used when the connection cap is reached so clients get
+/// a bounded, deterministic failure instead of hanging behind a full thread pool.
+fn reject_too_busy(mut stream: TcpStream) {
+    let response = HttpResponse::error(503, "service_unavailable", "too many connections");
+    let _ = response.write_to(&mut stream);
 }
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -595,5 +645,28 @@ mod tests {
             rebound.is_ok(),
             "rebinding immediately after drop should succeed"
         );
+    }
+
+    #[test]
+    fn http_push_rejects_beyond_connection_cap() {
+        let (handle, _app, _seen) = start_listener();
+        // Hold `MAX_CONCURRENT_CONNECTIONS` slots open by connecting without
+        // sending a request: each handler blocks on the read timeout, so the
+        // live counter stays pinned at the cap.
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_CONNECTIONS {
+            held.push(TcpStream::connect(handle.addr()).unwrap());
+        }
+        // The next connection must be rejected immediately rather than accepted
+        // and queued behind a full handler pool.
+        let mut overflow = TcpStream::connect(handle.addr()).unwrap();
+        let response = http_request(&mut overflow, "");
+        assert_eq!(
+            status_of(&response),
+            503,
+            "connection beyond the cap should be rejected with 503, got: {response}"
+        );
+        drop(held);
+        drop(overflow);
     }
 }
