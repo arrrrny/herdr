@@ -928,3 +928,141 @@ fn codex_osc_working_beats_weak_blocker_screen() {
         Some("osc_title_working")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ziki manifest tests — contract 011-herdr-ziki-state-sync §3 screen markers
+// and §4 OSC title (screen/OSC-only fallback mode).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ziki_manifest_screen_marker_blocked() {
+    let result = explain(
+        Agent::Ziki,
+        "goal: fix the flaky test\n[ziki-state: working]\nrunning: cargo nextest\n[ziki-state: blocked] criterion not satisfied after retries",
+    );
+    assert_eq!(result.state, AgentState::Blocked);
+    assert!(result.visible_blocker);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("screen_marker_blocked")
+    );
+}
+
+#[test]
+fn ziki_manifest_screen_marker_working() {
+    let result = explain(
+        Agent::Ziki,
+        "goal: fix the flaky test\n[ziki-state: working]\nrunning: cargo nextest run\nstep 2/3: patching tests",
+    );
+    assert_eq!(result.state, AgentState::Working);
+    assert!(result.visible_working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("screen_marker_working")
+    );
+}
+
+#[test]
+fn ziki_manifest_screen_marker_idle() {
+    let result = explain(
+        Agent::Ziki,
+        "goal: fix the flaky test\n[ziki-state: working]\nrunning: cargo nextest run\nall checks passed\n[ziki-state: idle]",
+    );
+    assert_eq!(result.state, AgentState::Idle);
+    assert!(result.visible_idle);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("screen_marker_idle")
+    );
+}
+
+#[test]
+fn ziki_manifest_osc_title_states() {
+    for (title, state) in [
+        ("ziki:blocked", AgentState::Blocked),
+        ("ziki:working", AgentState::Working),
+        ("ziki:idle", AgentState::Idle),
+    ] {
+        let result = osc_explain(Agent::Ziki, "", title, "");
+        assert_eq!(result.state, state, "title {title}");
+        assert!(result.matched_rule.is_some(), "title {title}");
+    }
+
+    let blocked = osc_explain(Agent::Ziki, "", "ziki:blocked", "");
+    assert!(blocked.visible_blocker);
+    let working = osc_explain(Agent::Ziki, "", "ziki:working", "");
+    assert!(working.visible_working);
+    let idle = osc_explain(Agent::Ziki, "", "ziki:idle", "");
+    assert!(idle.visible_idle);
+}
+
+#[test]
+fn ziki_manifest_osc_outranks_screen() {
+    // A current OSC title beats a stale blocked marker still in the bottom window.
+    let working_now = osc_explain(
+        Agent::Ziki,
+        "[ziki-state: blocked] criterion not satisfied after retries",
+        "ziki:working",
+        "",
+    );
+    assert_eq!(working_now.state, AgentState::Working);
+    assert_eq!(
+        working_now.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_working")
+    );
+
+    // A blocked OSC title beats a stale working marker on screen.
+    let blocked_now = osc_explain(
+        Agent::Ziki,
+        "[ziki-state: working]\nrunning: cargo nextest run",
+        "ziki:blocked",
+        "",
+    );
+    assert_eq!(blocked_now.state, AgentState::Blocked);
+    assert_eq!(
+        blocked_now.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_blocked")
+    );
+}
+
+#[test]
+fn ziki_manifest_newest_marker_wins() {
+    // The blocked marker scrolled out of the tight bottom window while the
+    // newer working marker (plus tool output) is on screen: working wins.
+    let result = explain(
+        Agent::Ziki,
+        "[ziki-state: blocked] criterion not satisfied after retries\nuser answered\nresuming turn\n[ziki-state: working]\nrunning: cargo nextest run\nstep 2/3: patching tests\nstep 3/3: verifying",
+    );
+    assert_eq!(result.state, AgentState::Working);
+    assert!(result.visible_working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("screen_marker_working")
+    );
+}
+
+#[test]
+fn ziki_manifest_bundled_and_parseable() {
+    // SC-001/SC-007: the bundled manifest loads for the ziki agent.
+    assert!(bundled_manifest(Agent::Ziki).is_some());
+}
+
+#[test]
+fn ziki_query_surface_explains_from_agent_label() {
+    // `herdr agent explain --file PATH --agent ziki` resolves through
+    // explain_for_label; prove the label path picks the ziki manifest and
+    // reports the state with evidence.
+    let explain = explain_for_label(
+        "ziki",
+        "goal: ship it\n[ziki-state: blocked] criterion not satisfied after retries",
+    );
+    assert_eq!(explain.state, AgentState::Blocked);
+    assert_eq!(explain.agent.as_deref(), Some("ziki"));
+    assert_eq!(
+        explain.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("screen_marker_blocked")
+    );
+    let json = explain_to_json_value(&explain);
+    assert_eq!(json["state"], "blocked");
+    assert_eq!(json["agent"], "ziki");
+}
