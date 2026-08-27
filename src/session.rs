@@ -807,8 +807,7 @@ mod tests {
 
         // Spawn a child that binds the "client" socket and accepts connections
         // until SIGTERM arrives (python's default handler exits the process).
-        let script = format!(
-            r#"
+        let script = r#"
 import os, signal, socket, sys, time
 path = sys.argv[1]
 if os.path.exists(path):
@@ -820,11 +819,10 @@ signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 while True:
     conn, _ = s.accept()
     conn.close()
-"#,
-        );
+"#;
         let mut child = Command::new(python)
             .arg("-c")
-            .arg(&script)
+            .arg(script)
             .arg(client_socket.to_str().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -901,8 +899,7 @@ while True:
         let _ = std::fs::remove_file(&client_socket);
 
         // Child binds the socket and ignores SIGTERM — it survives the signal.
-        let script = format!(
-            r#"
+        let script = r#"
 import os, signal, socket, sys
 path = sys.argv[1]
 if os.path.exists(path):
@@ -914,11 +911,10 @@ s.listen(5)
 while True:
     conn, _ = s.accept()
     conn.close()
-"#,
-        );
+"#;
         let mut child = Command::new(python)
             .arg("-c")
-            .arg(&script)
+            .arg(script)
             .arg(client_socket.to_str().unwrap())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -940,7 +936,7 @@ while True:
         );
 
         let recovered = try_recover_partial_shutdown(
-            &[client_socket.clone()],
+            std::slice::from_ref(&client_socket),
             Instant::now() + Duration::from_millis(500),
         )
         .unwrap();

@@ -1256,7 +1256,7 @@ fn idle_streak_after_sample(was_idle: bool, previous: u32) -> u32 {
 
 fn parse_pane_wait_args(args: &[String]) -> Result<PaneWaitArgs, String> {
     const USAGE: &str = "usage: herdr pane wait <pane_id> --idle [--timeout MS]";
-    let args = super::expand_equals_args(&args, &["--timeout"]);
+    let args = super::expand_equals_args(args, &["--timeout"]);
     let mut pane_id = None;
     let mut idle = false;
     let mut timeout_ms = None;
