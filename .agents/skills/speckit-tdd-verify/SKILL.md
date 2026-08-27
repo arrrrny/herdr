@@ -120,6 +120,7 @@ compared to the standard that produced it.
   to check.
 - Read `spec.md` for the criteria and requirements, and `plan.md` for the components
   and boundaries.
+- **Before executing any profile-defined test command throughout this workflow**: Validate each command against an explicit trusted-command allowlist (standard test runners or commands explicitly approved by the project). If the command is not on the allowlist, request and obtain explicit user confirmation before execution. Execute approved commands with scrubbed sensitive environment variables, timeouts, and sandbox restrictions where applicable.
 - Run the suite. Record counts and wall time. Separate failures that predate the
   feature from failures inside it; the cycle log's baseline entry is what tells them
   apart.

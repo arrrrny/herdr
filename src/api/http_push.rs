@@ -42,6 +42,7 @@ pub(crate) const AGENT_REPORT_PATH: &str = "/api/v1/pane/report/agent";
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Resolve the push listener bind address: `HERDR_API_LISTEN_ADDR` wins over
@@ -69,6 +70,14 @@ pub(crate) fn resolved_http_push_listen_addr() -> Option<SocketAddr> {
 
 fn parse_listen_addr(value: &str, source: &str) -> Option<SocketAddr> {
     if let Ok(addr) = value.parse::<SocketAddr>() {
+        if !addr.ip().is_loopback() {
+            warn!(
+                source,
+                value,
+                "agent push listen address must be loopback (127.0.0.1 or ::1) for unauthenticated endpoint"
+            );
+            return None;
+        }
         return Some(addr);
     }
     // Hostnames such as `localhost:7878` are accepted for parity with the
@@ -77,7 +86,17 @@ fn parse_listen_addr(value: &str, source: &str) -> Option<SocketAddr> {
         Ok(mut addrs) => {
             let addr = addrs.find(|addr| addr.is_ipv4()).or_else(|| addrs.next());
             match addr {
-                Some(addr) => Some(addr),
+                Some(addr) => {
+                    if !addr.ip().is_loopback() {
+                        warn!(
+                            source,
+                            value,
+                            "agent push listen address must be loopback (127.0.0.1 or ::1) for unauthenticated endpoint"
+                        );
+                        return None;
+                    }
+                    Some(addr)
+                }
                 None => {
                     warn!(
                         source,
@@ -98,6 +117,7 @@ pub(crate) struct HttpPushServerHandle {
     running: Arc<AtomicBool>,
     #[cfg_attr(not(test), allow(dead_code))]
     addr: SocketAddr,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl HttpPushServerHandle {
@@ -110,11 +130,20 @@ impl HttpPushServerHandle {
 impl Drop for HttpPushServerHandle {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
+        // Unblock the accept loop by connecting to the listener's address.
+        // The loop will observe running == false after accept() returns and exit.
+        if let Ok(mut unblock) = TcpStream::connect(self.addr) {
+            let _ = unblock.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
-/// Start the push listener. The accept thread is best-effort stopped when the
-/// handle is dropped, mirroring the JSON-RPC socket server's lifecycle.
+/// Start the push listener. The accept thread is stopped and joined when the
+/// handle is dropped, ensuring the TcpListener is released, mirroring the
+/// JSON-RPC socket server's lifecycle.
 pub(crate) fn start_http_push_server(
     api_tx: ApiRequestSender,
     listen_addr: SocketAddr,
@@ -150,8 +179,11 @@ pub(crate) fn start_http_push_server(
             }
         })?;
     info!(addr = %addr, "agent push http server listening");
-    let _ = thread;
-    Ok(HttpPushServerHandle { addr, running })
+    Ok(HttpPushServerHandle {
+        addr,
+        running,
+        thread: Some(thread),
+    })
 }
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -202,6 +234,9 @@ impl HttpResponse {
 }
 
 fn handle_connection(mut stream: TcpStream, api_tx: &ApiRequestSender) -> io::Result<()> {
+    // Set read timeout to bound total connection duration for headers and body
+    stream.set_read_timeout(Some(CONNECTION_READ_TIMEOUT))?;
+
     let request = match read_request(&mut stream) {
         Ok(Some(request)) => request,
         Ok(None) => return Ok(()),
@@ -545,5 +580,20 @@ mod tests {
         assert!(parse_listen_addr("localhost:7878", "test").is_some());
         assert!(parse_listen_addr("not an address", "test").is_none());
         assert!(parse_listen_addr("", "test").is_none());
+    }
+
+    #[test]
+    fn http_push_handle_drop_releases_port() {
+        let (app, _seen) = FakeApp::new(|_| r#"{"id":"x","result":{"type":"ok"}}"#.to_string());
+        let handle =
+            start_http_push_server(app.api_tx.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = handle.addr();
+        drop(handle);
+        // If the port was not released, this bind will fail.
+        let rebound = TcpListener::bind(addr);
+        assert!(
+            rebound.is_ok(),
+            "rebinding immediately after drop should succeed"
+        );
     }
 }

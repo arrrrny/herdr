@@ -7,7 +7,7 @@ hooks:
   - extension: tdd
     command: speckit.tdd.plan
     enabled: true
-    optional: true
+    optional: false
     priority: 10
     prompt: Derive the TDD test list and make the test tasks in tasks.md mandatory?
     description: Generate specs/<feature>/tdd/test-list.md from spec.md and plan.md,

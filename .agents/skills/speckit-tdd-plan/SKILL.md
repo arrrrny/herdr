@@ -111,6 +111,7 @@ presets sit above extensions precisely so a preset can override this text.
 - Read `.specify/memory/constitution.md` if present. A constitution principle about
   testing changes what "mandatory" means in Phase 5.
 - Record `git rev-parse --short HEAD` for `planned_at`.
+- **Before executing the profile-defined suite command**: Validate the command against an explicit trusted-command allowlist (standard test runners or commands explicitly approved by the project). If the command is not on the allowlist, request and obtain explicit user confirmation before execution. Execute approved commands with scrubbed sensitive environment variables, timeouts, and sandbox restrictions where applicable.
 - Run the profile's suite command to establish the baseline. Record the counts. A
   red baseline goes in the frontmatter as `suite_baseline: red` and into the report:
   the loop must not start on top of it.

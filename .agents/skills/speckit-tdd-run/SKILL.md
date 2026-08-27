@@ -122,6 +122,7 @@ presets sit above extensions precisely so a preset can override this text.
   first. Take the single-test, suite, and (where present) coverage and mutation
   commands, and the conventions, the exemplar for each test kind, and the helper
   paths from its body.
+- **Before executing any profile-defined test command throughout this workflow**: Validate each command against an explicit trusted-command allowlist (standard test runners or commands explicitly approved by the project). If the command is not on the allowlist, request and obtain explicit user confirmation before execution. Execute approved commands with scrubbed sensitive environment variables, timeouts, and sandbox restrictions where applicable.
 - Resolve the feature directory with spec-kit's own resolver, not a guess: run
   `.specify/scripts/bash/check-prerequisites.sh --json --paths-only` (or the
   `powershell` or `python` variant your project installed) and take `FEATURE_DIR`
@@ -252,10 +253,16 @@ inventing a change to look thorough.
 
 ### Phase 6: Record and commit
 
-Append one entry to `FEATURE_DIR/tdd/cycle-log.md` in the shape given by the test
+Commit the test and implementation first, per the playbook's cadence: the test and its implementation
+together, structural refactors as their own commit, message in the repository's
+existing style naming the behavior. Under `tcr`, commit automatically on green and
+revert the working change on red. Under `--no-commit`, leave the tree dirty and say
+so in the report. Capture the commit SHA after this step.
+
+Then append one entry to `FEATURE_DIR/tdd/cycle-log.md` in the shape given by the test
 list template: the test file and name, the red command and its output, what made it
 green and the resulting suite counts, what the refactor changed, and the commit
-SHA. Any deviation (a split step, a revert, a test-after admission, a pre-existing
+SHA captured above. Any deviation (a split step, a revert, a test-after admission, a pre-existing
 red) goes in the entry's notes. The log is append only: never edit a past entry.
 
 Update the behavior's row in the test list: state `DONE`, and the `test` column
@@ -274,11 +281,7 @@ Then tick the work off in `FEATURE_DIR/tasks.md`, using the map from Phase 0:
   implementation written over freshly test-driven code. Ticking it is what makes
   the handoff safe.
 
-Commit at green, per the playbook's cadence: the test and its implementation
-together, structural refactors as their own commit, message in the repository's
-existing style naming the behavior. Under `tcr`, commit automatically on green and
-revert the working change on red. Under `--no-commit`, leave the tree dirty and say
-so in the report.
+Commit these bookkeeping changes (cycle-log entry, behavior row update, and task checkboxes) separately as a second commit.
 
 ### Phase 7: Continue or report
 
