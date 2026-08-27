@@ -1,8 +1,8 @@
-# Sync upstream (herdrdev/herdr) changes into development daily.
+# Sync upstream (herdrdev/herdr) changes into master daily.
 #
-# Keeps the fork's development branch up to date with upstream while
-# preserving fork-owned patches — on conflict the fork's own version wins,
-# so customizations on top of upstream survive the sync.
+# Keeps the fork's master branch up to date with upstream. On a merge
+# conflict the sync aborts (no push) so conflicts can be resolved by hand
+# instead of silently keeping fork-owned changes over upstream fixes.
 
 name: Sync Upstream
 
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   sync:
-    name: Sync upstream to development
+    name: Sync upstream to master
     runs-on: ubuntu-latest
 
     steps:
@@ -37,8 +37,8 @@ jobs:
       - name: Fetch upstream
         run: git fetch upstream master
 
-      - name: Switch to development
-        run: git checkout development || git checkout -b development
+      - name: Switch to master
+        run: git checkout master || git checkout -b master
 
       - name: Check if already up to date
         id: check
@@ -57,15 +57,11 @@ jobs:
           if git merge upstream/master --no-edit -m "merge: sync upstream $(date +%Y-%m-%d)"; then
             echo "Merge succeeded"
           else
-            echo "Merge conflict — keeping fork changes on conflict"
-            CONFLICTS=$(git diff --name-only --diff-filter=U)
-            for f in $CONFLICTS; do
-              git checkout --ours "$f"
-              git add "$f"
-            done
-            git commit --no-edit -m "merge: sync upstream $(date +%Y-%m-%d) (fork changes kept)"
+            echo "Merge conflict — aborting sync to avoid silently dropping upstream changes"
+            git merge --abort
+            exit 1
           fi
 
       - name: Push
         if: steps.check.outputs.up_to_date == 'false'
-        run: git push origin development
+        run: git push origin master
