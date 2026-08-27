@@ -132,7 +132,7 @@ impl Drop for HttpPushServerHandle {
         self.running.store(false, Ordering::Release);
         // Unblock the accept loop by connecting to the listener's address.
         // The loop will observe running == false after accept() returns and exit.
-        if let Ok(mut unblock) = TcpStream::connect(self.addr) {
+        if let Ok(unblock) = TcpStream::connect(self.addr) {
             let _ = unblock.shutdown(std::net::Shutdown::Both);
         }
         if let Some(thread) = self.thread.take() {
