@@ -899,7 +899,7 @@ mod tests {
         assert_eq!(identify_agent("ziki"), Some(Agent::Ziki));
         assert_eq!(identify_agent("Ziki"), Some(Agent::Ziki));
         assert_eq!(identify_agent("ZIKI"), Some(Agent::Ziki));
-        assert_eq!(identify_agent("/usr/local/bin/ziki"), None);
+        assert_eq!(identify_agent("/usr/local/bin/ziki"), Some(Agent::Ziki));
         assert_eq!(parse_agent_label("ziki"), Some(Agent::Ziki));
         assert_eq!(parse_agent_label("ziki-agent"), None);
     }
@@ -922,13 +922,13 @@ mod tests {
     #[test]
     fn ziki_in_agent_enumerations() {
         assert!(Agent::ALL.contains(&Agent::Ziki));
-        assert_eq!(Agent::ALL.len(), 23);
+        assert_eq!(Agent::ALL.len(), 24);
     }
 
     #[test]
     fn ziki_in_screen_manifest_agents() {
         assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Ziki));
-        assert_eq!(Agent::SCREEN_MANIFEST_AGENTS.len(), 21);
+        assert_eq!(Agent::SCREEN_MANIFEST_AGENTS.len(), 22);
     }
 
     #[test]

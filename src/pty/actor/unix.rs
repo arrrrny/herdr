@@ -1498,7 +1498,9 @@ mod tests {
             "each pty write must stay under the BSD/Darwin tty input queue bound"
         );
         let (mut runner, peer) = actor_runner_over_datagram_pair();
-        let payload: Vec<u8> = (0..5000u32).map(|index| (index % 251) as u8).collect();
+        let payload: Vec<u8> = (0..(TTYHOG as u32 + 1))
+            .map(|index| (index % 251) as u8)
+            .collect();
         assert!(payload.len() > TTYHOG);
 
         runner.enqueue_write(Bytes::from(payload.clone()));

@@ -113,12 +113,16 @@ fn agent_wait_exits_when_done_status_matches() {
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
     let bin_dir = base.join("bin");
+    let stop_file = base.join("pi-stop");
 
     fs::create_dir_all(&bin_dir).unwrap();
     let fake_pi = bin_dir.join("pi");
     fs::write(
         &fake_pi,
-        "#!/bin/sh\nprintf 'starting\\n'\nsleep 4\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\n",
+        format!(
+            "#!/bin/sh\nprintf 'starting\\n'\nsleep 4\nprintf 'Working...\\n'\nsleep 1\nprintf '\\033[2J\\033[Hdone\\n'\nwhile [ ! -f '{}' ]; do sleep 0.05; done\n",
+            stop_file.display()
+        ),
     )
     .unwrap();
     #[cfg(unix)]
@@ -196,5 +200,6 @@ fn agent_wait_exits_when_done_status_matches() {
     assert_eq!(waited_json["result"]["agent"]["agent_status"], "done");
     assert_eq!(waited_json["result"]["agent"]["agent"], "pi");
 
+    fs::write(&stop_file, "stop").unwrap();
     cleanup_spawned_herdr(herdr, base);
 }
