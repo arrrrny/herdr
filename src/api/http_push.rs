@@ -191,6 +191,10 @@ pub(crate) fn start_http_push_server(
                             break;
                         }
                         warn!(err = %err, "http push listener accept failed");
+                        // Bound the retry rate so a persistent error (e.g. EMFILE)
+                        // cannot spin the loop and flood the logs while the
+                        // listener is unable to accept connections.
+                        std::thread::sleep(Duration::from_millis(50));
                         continue;
                     }
                 };
@@ -656,6 +660,19 @@ mod tests {
         let mut held = Vec::new();
         for _ in 0..MAX_CONCURRENT_CONNECTIONS {
             held.push(TcpStream::connect(handle.addr()).unwrap());
+        }
+        // A held socket can be accepted only after its handler has spawned and
+        // incremented the live counter, so wait (bounded) for the cap to be
+        // reached before opening the overflow connection. Without this, the
+        // overflow socket can race into a normal handler and wait on the read
+        // timeout instead of being rejected.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while handle.active.load(Ordering::Acquire) < MAX_CONCURRENT_CONNECTIONS {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "connection handlers did not reach the configured cap"
+            );
+            std::thread::sleep(Duration::from_millis(10));
         }
         // The next connection must be rejected immediately rather than accepted
         // and queued behind a full handler pool.
