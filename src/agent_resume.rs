@@ -244,7 +244,18 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:ziki", "ziki")
     )
+}
+
+/// Ziki folds its session identity into every state report instead of sending
+/// a separate `pane report-agent-session` push (contract
+/// `specs/011-herdr-ziki-state-sync` §2 on the ziki repo). When true, the
+/// pane-report ingestion synthesizes the session-start event that kimi-style
+/// integrations emit separately, so the full-lifecycle report router has a
+/// session anchor for the incoming state report.
+pub(crate) fn state_report_carries_session_start(source: &str, agent: &str) -> bool {
+    matches!((source, agent), ("herdr:ziki", "ziki"))
 }
 
 fn valid_session_id(value: &str) -> bool {

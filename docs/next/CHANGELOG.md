@@ -4,6 +4,7 @@
 
 ### Added
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
+- Added Ziki agent support: `ziki` panes are detected as a known agent, their state-report pushes are ingested through a new loopback HTTP listener (`POST /api/v1/pane/report/agent` on `127.0.0.1:7878` by default, configurable or disableable with `[server].agent_push_listen_addr`), and `[ziki-state: <state>]` screen markers plus `ziki:<state>` OSC titles drive detection when the push path is unavailable. (#035)
 
 ### Fixed
 - Running named servers now activate remote agent-detection manifests downloaded by another server, preventing stale agent states and `agent explain` output until restart. (#2711)

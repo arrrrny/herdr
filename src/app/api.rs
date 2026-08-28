@@ -2355,4 +2355,101 @@ mod tests {
             Some("__herdr_original__ · 1")
         );
     }
+
+    #[test]
+    fn ziki_reports_drive_pane_state_through_the_api() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("ziki");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        let public_pane_id = format!("{}:p1", workspace.id);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        // The pane runtime detected the ziki process as the foreground agent.
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Ziki), AgentState::Unknown);
+
+        let report = |state: &str, seq: u64, session: &str| {
+            crate::api::schema::Method::PaneReportAgent(crate::api::schema::PaneReportAgentParams {
+                pane_id: public_pane_id.clone(),
+                source: "herdr:ziki".into(),
+                agent: "ziki".into(),
+                state: match state {
+                    "working" => crate::api::schema::PaneAgentState::Working,
+                    "blocked" => crate::api::schema::PaneAgentState::Blocked,
+                    "idle" => crate::api::schema::PaneAgentState::Idle,
+                    _ => crate::api::schema::PaneAgentState::Unknown,
+                },
+                message: None,
+                seq: Some(seq),
+                agent_session_id: Some(session.into()),
+                agent_session_path: None,
+            })
+        };
+
+        // §2 push: working (seq 1, session goal-1).
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "ziki-1".into(),
+            method: report("working", 1, "goal-1"),
+        });
+        assert!(
+            response.contains("\"result\""),
+            "working report: {response}"
+        );
+        assert_eq!(
+            app.state.terminals[&terminal_id].state,
+            AgentState::Working,
+            "first ziki push must drive the pane state"
+        );
+
+        // §2 push: blocked (seq 2).
+        app.handle_api_request(crate::api::schema::Request {
+            id: "ziki-2".into(),
+            method: report("blocked", 2, "goal-1"),
+        });
+        assert_eq!(app.state.terminals[&terminal_id].state, AgentState::Blocked);
+
+        // Stale report (seq 1 again) must not win.
+        app.handle_api_request(crate::api::schema::Request {
+            id: "ziki-3".into(),
+            method: report("working", 1, "goal-1"),
+        });
+        assert_eq!(
+            app.state.terminals[&terminal_id].state,
+            AgentState::Blocked,
+            "stale seq report must be ignored"
+        );
+
+        // Process exit without a terminal idle push: the stale hook state must
+        // stop winning (death → unknown resolution window).
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Ziki),
+            state: AgentState::Unknown,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: true,
+            observed_at: std::time::Instant::now(),
+        });
+        assert_ne!(
+            app.state.terminals[&terminal_id].state,
+            AgentState::Blocked,
+            "dead ziki pane must not stay stuck on the stale blocked report"
+        );
+        assert_eq!(
+            app.state.terminals[&terminal_id].effective_agent_label(),
+            None,
+            "process exit must release the ziki agent label"
+        );
+    }
 }

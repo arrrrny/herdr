@@ -37,10 +37,7 @@ pub(crate) fn handle_if_click_launch() -> std::io::Result<Option<i32>> {
     }
     // Best-effort: never bubble errors into the user's terminal — the
     // click-handler is a background process with no TTY attached.
-    let exit_code = match run_click_handler() {
-        Ok(code) => code,
-        Err(_) => 1,
-    };
+    let exit_code = run_click_handler().unwrap_or(1);
     Ok(Some(exit_code))
 }
 
