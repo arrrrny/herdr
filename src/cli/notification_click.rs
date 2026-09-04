@@ -148,7 +148,9 @@ fn run_click_handler() -> std::io::Result<i32> {
         return Ok(0);
     }
 
-    log_click(format!("handler: parsed pane_id={pane_id}; sending pane.focus"));
+    log_click(format!(
+        "handler: parsed pane_id={pane_id}; sending pane.focus"
+    ));
     let request = Request {
         id: "macos-notification-click".into(),
         method: Method::PaneFocus(PaneTarget { pane_id }),
