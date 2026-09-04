@@ -27,11 +27,15 @@ use crate::api::schema::{Method, PaneTarget, Request};
 /// stale (the notification was probably long-since dismissed).
 const NOTIFICATION_CLICK_TARGET_MAX_AGE: Duration = Duration::from_secs(5 * 60);
 
+/// Maximum log file size before rotation (64 KB).
+const LOG_MAX_BYTES: u64 = 64 * 1024;
+
 /// Append a timestamped line to `<config_dir>/notification_click.log`.
 ///
 /// The click-launched binary has no TTY, so this is the only observable
 /// trace of whether a macOS notification click was detected and what it did.
-/// Best-effort: a failed write is silently ignored.
+/// Best-effort: a failed write is silently ignored. The file is rotated to
+/// `notification_click.log.1` when it exceeds 64 KB to prevent unbounded growth.
 fn log_click(msg: impl Into<String>) {
     let msg = msg.into();
     let path = crate::config::config_dir().join("notification_click.log");
@@ -39,6 +43,14 @@ fn log_click(msg: impl Into<String>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    // Rotate when the log file exceeds 64 KB.
+    let _ = std::fs::metadata(&path)
+        .ok()
+        .filter(|m| m.len() > LOG_MAX_BYTES)
+        .and_then(|_| {
+            let rotated = path.with_extension("log.1");
+            std::fs::rename(&path, rotated).ok()
+        });
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

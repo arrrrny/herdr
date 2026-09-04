@@ -688,8 +688,9 @@ fn build_terminal_notifier_command(
             .filter(|path| !path.as_os_str().is_empty())
         {
             cmd.arg("-execute").arg(binary_path);
-            eprintln!(
-                "[herdr-notif] system notification shown with click target {target}; -execute set, -activate skipped"
+            tracing::debug!(
+                target,
+                "notification click target set: -execute active, -activate skipped"
             );
         }
     }
