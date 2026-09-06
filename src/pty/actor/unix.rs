@@ -17,6 +17,16 @@ use crate::pty::fd;
 // normal responsiveness.
 const ACTOR_IDLE_POLL_MS: i32 = 1000;
 const ACTOR_COMMAND_BUFFER: usize = 1024;
+
+// BSD/Darwin line discipline keeps at most `TTYHOG` (1024) bytes queued for the
+// child. `ttyinput` discards the whole pending input queue once a single write
+// pushes it past that bound, so a large one-shot write to the master silently
+// loses everything after the first 1024 bytes instead of short-writing. Feeding
+// the master in sub-TTYHOG slices keeps the kernel's own EWOULDBLOCK
+// backpressure intact: the poll loop then waits for write readiness (i.e. for
+// the child to drain) and resumes at `current_write_offset`, so long injected
+// input such as `agent start` command lines arrives complete.
+const PTY_WRITE_CHUNK_BYTES: usize = 512;
 const HANDOFF_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,7 +933,8 @@ impl PtyIoActorRunner {
 
     fn flush_pending_writes_once(&mut self) -> std::io::Result<Option<SubmissionBoundary>> {
         while let Some(write) = self.pending_writes.front() {
-            let chunk = &write.bytes[self.current_write_offset..];
+            let remaining = &write.bytes[self.current_write_offset..];
+            let chunk = &remaining[..remaining.len().min(PTY_WRITE_CHUNK_BYTES)];
             match self.file.write(chunk) {
                 Ok(0) => {
                     return Err(std::io::Error::new(
