@@ -27,6 +27,7 @@ const ACTOR_COMMAND_BUFFER: usize = 1024;
 // the child to drain) and resumes at `current_write_offset`, so long injected
 // input such as `agent start` command lines arrives complete.
 const PTY_WRITE_CHUNK_BYTES: usize = 512;
+const _: () = assert!(PTY_WRITE_CHUNK_BYTES < 1024, "chunk must stay under BSD/Darwin TTYHOG");
 const HANDOFF_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

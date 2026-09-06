@@ -160,7 +160,7 @@ pub(super) fn wait_for_agent(
             initial,
             last_event_sequence,
             after_state_change_seq: None,
-            accept_transient_status: false,
+            accept_transient_status: true,
             timeout_kind: AgentWaitTimeoutKind::Status,
         },
         stream,
