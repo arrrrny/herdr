@@ -473,11 +473,6 @@ fn wait_for_resolved_agent(
                     .map(AgentWaitOutcome::Response)
                     .map(Some);
             }
-            if let Some(status) = matched_event_status {
-                let mut matched = current;
-                matched.agent_status = status;
-                return Ok(Some(AgentWaitOutcome::Matched(Box::new(matched))));
-            }
             if agent_wait_matches(&current, &wait.until, wait.after_state_change_seq) {
                 return Ok(Some(AgentWaitOutcome::Matched(Box::new(current))));
             }

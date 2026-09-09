@@ -302,6 +302,18 @@ pub enum ResponseResult {
         projection_revision: u64,
     },
     Ok {},
+    BadgeList {
+        badges: Vec<crate::api::schema::BadgeInfo>,
+    },
+    BadgeSet {
+        key: String,
+        text: String,
+        color: String,
+    },
+    BadgeClear {
+        key: String,
+        existed: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 mod agent_view;
 mod agents;
+mod badges;
 mod env;
 mod integrations;
 mod layouts;
@@ -1221,6 +1222,13 @@ impl App {
             Method::PluginPaneClose(params) => {
                 return self.handle_plugin_pane_close(request.id, params);
             }
+            Method::BadgeSet(params) => {
+                return self.handle_badge_set(request.id, params);
+            }
+            Method::BadgeClear(params) => {
+                return self.handle_badge_clear(request.id, params);
+            }
+            Method::BadgeList(_) => return self.handle_badge_list(request.id),
             _ => {
                 return responses::encode_error(
                     request.id,

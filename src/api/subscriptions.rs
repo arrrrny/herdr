@@ -93,6 +93,9 @@ impl PanePresentationSnapshot {
 
 pub(super) struct ActiveEventSubscription {
     event_kind: crate::api::schema::EventKind,
+    /// Live cursor. Seeded with the event-hub sequence captured at subscribe
+    /// time, so the poll loop only yields events emitted after the
+    /// subscription started.
     last_sequence: u64,
 }
 
@@ -611,6 +614,26 @@ mod tests {
         }
     }
 
+    fn tab_focused_event(tab_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            event: EventKind::TabFocused,
+            data: EventData::TabFocused {
+                tab_id: tab_id.into(),
+                workspace_id: "workspace_1".into(),
+            },
+        }
+    }
+
+    fn pane_focused_event(pane_id: &str) -> EventEnvelope {
+        EventEnvelope {
+            event: EventKind::PaneFocused,
+            data: EventData::PaneFocused {
+                pane_id: pane_id.into(),
+                workspace_id: "workspace_1".into(),
+            },
+        }
+    }
+
     fn pane_info_with_scroll(scroll: Option<PaneScrollInfo>) -> PaneInfo {
         PaneInfo {
             pane_id: "pane_1".into(),
@@ -662,6 +685,45 @@ mod tests {
         event_hub.push(workspace_focused_event("after_setup"));
         let live_event = subscription.poll(&api_tx, &event_hub).expect("live event");
         assert_eq!(live_event["data"]["workspace_id"], "after_setup");
+    }
+
+    #[test]
+    fn fresh_lifecycle_subscription_receives_no_retained_events_only_live() {
+        let event_hub = EventHub::default();
+        // Retained history: a mix of lifecycle events, including the subscribed
+        // kind. A plugin subscribing to pane.* should not be replayed any of
+        // these when a fresh events.subscribe stream starts.
+        event_hub.push(workspace_focused_event("retained_workspace"));
+        event_hub.push(tab_focused_event("retained_tab"));
+        event_hub.push(pane_focused_event("retained_pane"));
+
+        // Mirror the real events.subscribe handler (src/api/server.rs): the
+        // live cursor is captured at subscribe time, not at zero.
+        let event_start_sequence = event_hub.current_sequence();
+
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscription = ActiveSubscription::new(
+            Subscription::PaneFocused {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+            event_start_sequence,
+        )
+        .expect("pane focused subscription");
+
+        // No retained event is replayed, including the retained pane.focused.
+        assert!(
+            subscription.poll(&api_tx, &event_hub).is_none(),
+            "fresh subscription must not replay retained history"
+        );
+
+        // A matching event emitted after the subscription starts is delivered
+        // live, and only then.
+        event_hub.push(pane_focused_event("live_pane"));
+        let live_event = subscription.poll(&api_tx, &event_hub).expect("live event");
+        assert_eq!(live_event["event"], "pane_focused");
+        assert_eq!(live_event["data"]["pane_id"], "live_pane");
     }
 
     #[test]

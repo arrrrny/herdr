@@ -305,6 +305,12 @@ const PROCESS_ACQUISITION_FAST_WINDOW: std::time::Duration = std::time::Duration
 const PROCESS_ACQUISITION_FAST_RECHECK: std::time::Duration = std::time::Duration::from_millis(500);
 const PROCESS_ACQUISITION_SLOW_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
 const PROCESS_ACQUISITION_IDLE_RESET: std::time::Duration = std::time::Duration::from_secs(2);
+/// Interval at which a screen scan is allowed through even while a full
+/// lifecycle-hook authority is active, so the screen-derived `fallback_state`
+/// stays fresh and can take over once the authority goes stale (see
+/// FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in terminal/state.rs). Issue arrrrny/herdr#1.
+const SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPresence {
@@ -730,6 +736,7 @@ fn spawn_basic_detection_task(
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
+        let mut last_lifecycle_authority_scan_at: Option<std::time::Instant> = None;
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -878,8 +885,22 @@ fn spawn_basic_detection_task(
                 && !foreground_shell_exit_reported;
 
             if lifecycle_authority_active && !process_exited {
-                pending_idle.clear();
-                continue;
+                // Periodically let a screen scan through even while lifecycle-hook
+                // authority is active, so the screen-derived fallback_state stays
+                // fresh and can take over once the hook goes stale (see
+                // FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in terminal/state.rs).
+                // Issue arrrrny/herdr#1.
+                let screen_scan_due = last_lifecycle_authority_scan_at
+                    .map(|last| {
+                        now.duration_since(last) >= SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL
+                    })
+                    .unwrap_or(true);
+                if !screen_scan_due {
+                    pending_idle.clear();
+                    continue;
+                }
+                last_lifecycle_authority_scan_at = Some(now);
+                // fall through: run the screen scan this tick.
             }
 
             if let Some(until) = agent_startup_grace_until {
@@ -2446,6 +2467,7 @@ impl PaneRuntime {
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                let mut last_lifecycle_authority_scan_at: Option<Instant> = None;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2674,8 +2696,23 @@ impl PaneRuntime {
                         && !foreground_shell_exit_reported;
 
                     if lifecycle_authority_active && !process_exited {
-                        pending_idle.clear();
-                        continue;
+                        // Periodically let a screen scan through even while
+                        // lifecycle-hook authority is active, so the screen-derived
+                        // fallback_state stays fresh and can take over once the hook
+                        // goes stale (see FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in
+                        // terminal/state.rs). Issue arrrrny/herdr#1.
+                        let screen_scan_due = last_lifecycle_authority_scan_at
+                            .map(|last| {
+                                now.duration_since(last)
+                                    >= SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL
+                            })
+                            .unwrap_or(true);
+                        if !screen_scan_due {
+                            pending_idle.clear();
+                            continue;
+                        }
+                        last_lifecycle_authority_scan_at = Some(now);
+                        // fall through: run the screen scan this tick.
                     }
 
                     if let Some(until) = agent_startup_grace_until {

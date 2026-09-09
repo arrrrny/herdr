@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
+pub mod badges;
 pub mod commands;
 pub mod common;
 pub mod events;
@@ -15,6 +16,7 @@ pub mod workspaces;
 pub mod worktrees;
 
 pub use agents::*;
+pub use badges::*;
 pub use commands::*;
 pub use common::*;
 pub use events::*;
@@ -264,6 +266,12 @@ pub enum Method {
     PluginPaneFocus(PluginPaneFocusParams),
     #[serde(rename = "plugin.pane.close")]
     PluginPaneClose(PluginPaneCloseParams),
+    #[serde(rename = "badge.set")]
+    BadgeSet(BadgeSetParams),
+    #[serde(rename = "badge.clear")]
+    BadgeClear(BadgeClearParams),
+    #[serde(rename = "badge.list")]
+    BadgeList(EmptyParams),
 }
 
 #[cfg(test)]

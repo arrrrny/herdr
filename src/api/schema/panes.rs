@@ -577,6 +577,11 @@ pub struct PaneProcessInfo {
     pub tty: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foreground_processes: Vec<PaneProcessInfoProcess>,
+    /// Agent-integration-independent busy signal: a foreground process other than
+    /// the interactive shell is present on the pane's pty. `false` means only the
+    /// shell is running (idle).
+    #[serde(default)]
+    pub busy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

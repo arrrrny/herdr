@@ -32,7 +32,7 @@ pub(crate) fn should_query_host_terminal_palette() -> bool {
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
+    vec![super::user_login_shell().into_os_string(), flag.into(), command.into()]
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -45,7 +45,7 @@ pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::pr
 pub(crate) fn pane_custom_command_pty_builder_platform(
     command: &str,
 ) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
+    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-lc"))
 }
 
 pub(crate) fn scrollback_editor_argv(path: &Path) -> std::io::Result<Vec<String>> {
@@ -993,6 +993,30 @@ pub fn process_exists(pid: u32) -> bool {
     } else {
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
+}
+
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// On macOS, `lsof -t <path>` returns the PIDs of processes that have the file
+/// open. For a Unix domain socket, this is the process that bound it.
+pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .arg("-t")
+        .arg(socket_path)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
 }
 
 #[cfg(test)]

@@ -1,5 +1,11 @@
 # GitHub usernames with Herdr maintainer authority, one per line.
-# Maintainers must also use the canonical repository and have write access.
+#
+# This repository is the fork `arrrrny/herdr`. `arrrrny` is the fork owner and
+# maintainer, so fork-local agent/maintainer actions (opening PRs against the
+# fork, merging into the fork, etc.) are authorized here. The canonical
+# repository `herdrdev/herdr` is maintained upstream by `ogulcancelik` and
+# `kangal-bot`, who are NOT maintainers of this fork.
 ogulcancelik
 Pimpmuckl
 kangal-bot
+arrrrny

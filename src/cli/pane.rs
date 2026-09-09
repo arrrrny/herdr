@@ -9,6 +9,8 @@ use crate::api::schema::{
     SplitDirection,
 };
 
+use std::time::{Duration, Instant};
+
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
         print_pane_help();
@@ -36,6 +38,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "send-text" => pane_send_text(&args[1..]),
         "send-keys" => pane_send_keys(&args[1..]),
         "wait-output" => pane_wait_output(&args[1..]),
+        "wait" => pane_wait(&args[1..]),
         "report-agent" => pane_report_agent(&args[1..]),
         "report-agent-session" => pane_report_agent_session(&args[1..]),
         "release-agent" => pane_release_agent(&args[1..]),
@@ -1010,48 +1013,76 @@ fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
 }
 
 fn pane_close(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane close <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr pane close <pane_id>");
+    let (pane_id, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    if args.len() != consumed {
+        eprintln!("usage: herdr pane close [--pane ID|--current]");
         return Ok(2);
     }
 
-    super::runtime::pane_close(super::normalize_pane_id(raw_pane_id))
+    super::runtime::pane_close(pane_id)
 }
 
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane send-text <pane_id> <text>");
+    let (pane_id, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        eprintln!("usage: herdr pane send-text [--pane ID|--current] <text>");
         return Ok(2);
     }
 
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let text = args[1..].join(" ");
+    let text = rest.join(" ");
     super::send_ok_request(Method::PaneSendText(PaneSendTextParams { pane_id, text }))
 }
 
 fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane send-keys <pane_id> <key> [key ...]");
+    let (pane_id, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        eprintln!("usage: herdr pane send-keys [--pane ID|--current] <key> [key ...]");
         return Ok(2);
     }
 
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let keys = args[1..].to_vec();
+    let keys = rest.to_vec();
     super::send_ok_request(Method::PaneSendKeys(PaneSendKeysParams { pane_id, keys }))
 }
 
 fn pane_run(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane run <pane_id> <command>");
+    let (pane_id, consumed) =
+        match super::parse_write_pane_target(args, super::caller_pane_id().as_deref()) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                eprintln!("{message}");
+                return Ok(2);
+            }
+        };
+    let rest = &args[consumed..];
+    if rest.is_empty() {
+        eprintln!("usage: herdr pane run [--pane ID|--current] <command>");
         return Ok(2);
     }
 
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let text = args[1..].join(" ");
+    let text = rest.join(" ");
     super::send_ok_request(Method::PaneSendInput(PaneSendInputParams {
         pane_id,
         text,
@@ -1160,6 +1191,112 @@ fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParam
         r#match: matcher,
         timeout_ms,
         strip_ansi,
+    })
+}
+
+#[derive(Debug)]
+struct PaneWaitArgs {
+    pane_id: String,
+    idle: bool,
+    timeout_ms: Option<u64>,
+}
+
+fn pane_wait(args: &[String]) -> std::io::Result<i32> {
+    let params = match parse_pane_wait_args(args) {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+    };
+    if !params.idle {
+        eprintln!("usage: herdr pane wait <pane_id> --idle [--timeout MS]");
+        return Ok(2);
+    }
+    let deadline = params
+        .timeout_ms
+        .map(|ms| Instant::now() + Duration::from_millis(ms));
+    let mut idle_streak: u32 = 0;
+    loop {
+        if let Some(deadline) = deadline {
+            if Instant::now() >= deadline {
+                eprintln!("pane wait --idle timed out");
+                return Ok(1);
+            }
+        }
+        let response = super::send_request(&Request {
+            id: "cli:pane:wait".into(),
+            method: Method::PaneProcessInfo(PaneProcessInfoParams {
+                pane_id: Some(params.pane_id.clone()),
+            }),
+        })?;
+        if response.get("error").is_some() {
+            eprintln!("{}", response);
+            return Ok(1);
+        }
+        let busy = response["result"]["process_info"]["busy"]
+            .as_bool()
+            .unwrap_or(false);
+        idle_streak = idle_streak_after_sample(!busy, idle_streak);
+        if idle_streak >= 2 {
+            return Ok(0);
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// Returns the new consecutive-idle-sample count. A busy sample resets to 0.
+fn idle_streak_after_sample(was_idle: bool, previous: u32) -> u32 {
+    if was_idle {
+        previous + 1
+    } else {
+        0
+    }
+}
+
+fn parse_pane_wait_args(args: &[String]) -> Result<PaneWaitArgs, String> {
+    const USAGE: &str = "usage: herdr pane wait <pane_id> --idle [--timeout MS]";
+    let args = super::expand_equals_args(&args, &["--timeout"]);
+    let mut pane_id = None;
+    let mut idle = false;
+    let mut timeout_ms = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--idle" => {
+                idle = true;
+                index += 1;
+            }
+            "--timeout" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --timeout".into());
+                };
+                timeout_ms =
+                    Some(super::parse_u64_flag("--timeout", value).map_err(|err| err.to_string())?);
+                index += 2;
+            }
+            option if option.starts_with('-') => {
+                return Err(format!("unknown option: {option}"));
+            }
+            positional => {
+                if pane_id.is_some() {
+                    return Err(format!("unexpected argument: {positional}"));
+                }
+                pane_id = Some(super::normalize_pane_id(positional));
+                index += 1;
+            }
+        }
+    }
+    let Some(pane_id) = pane_id else {
+        return Err(USAGE.into());
+    };
+    if !idle {
+        return Err(USAGE.into());
+    }
+    Ok(PaneWaitArgs {
+        pane_id,
+        idle,
+        timeout_ms,
     })
 }
 
@@ -1691,15 +1828,15 @@ fn print_pane_help() {
     eprintln!("  herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
     eprintln!("  herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
     eprintln!("  herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
-    eprintln!("  herdr pane close <pane_id>");
-    eprintln!("  herdr pane send-text <pane_id> <text>");
-    eprintln!("  herdr pane send-keys <pane_id> <key> [key ...]");
+    eprintln!("  herdr pane close [--pane ID|--current]");
+    eprintln!("  herdr pane send-text [--pane ID|--current] <text>");
+    eprintln!("  herdr pane send-keys [--pane ID|--current] <key> [key ...]");
     eprintln!("  herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
     eprintln!("  herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
     eprintln!("  herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
     eprintln!("  herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
     eprintln!("  herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  herdr pane run <pane_id> <command>");
+    eprintln!("  herdr pane run [--pane ID|--current] <command>");
 }
 
 #[cfg(test)]
@@ -2104,5 +2241,109 @@ mod tests {
         let err = parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--regex", "b"]))
             .unwrap_err();
         assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn idle_streak_after_sample_resets_on_busy() {
+        assert_eq!(idle_streak_after_sample(false, 1), 0);
+        assert_eq!(idle_streak_after_sample(false, 0), 0);
+    }
+
+    #[test]
+    fn idle_streak_after_sample_reaches_two_on_consecutive_idle() {
+        assert_eq!(idle_streak_after_sample(true, 0), 1);
+        assert_eq!(idle_streak_after_sample(true, 1), 2);
+    }
+
+    #[test]
+    fn idle_streak_after_sample_busy_between_idles_resets() {
+        assert_eq!(idle_streak_after_sample(true, 0), 1);
+        assert_eq!(idle_streak_after_sample(false, 1), 0);
+        assert_eq!(idle_streak_after_sample(true, 0), 1);
+    }
+
+    #[test]
+    fn parse_pane_wait_args_parses_pane_id_idle_and_timeout() {
+        let params =
+            parse_pane_wait_args(&args(&["issue-1", "--idle", "--timeout", "5000"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert!(params.idle);
+        assert_eq!(params.timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn parse_pane_wait_args_accepts_equals_timeout() {
+        let params = parse_pane_wait_args(&args(&["--idle", "--timeout=5000", "issue-1"])).unwrap();
+
+        assert_eq!(params.pane_id, "issue-1");
+        assert!(params.idle);
+        assert_eq!(params.timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn parse_pane_wait_args_requires_idle() {
+        let err = parse_pane_wait_args(&args(&["issue-1"])).unwrap_err();
+        assert!(err.contains("usage: herdr pane wait"));
+    }
+
+    #[test]
+    fn parse_pane_wait_args_requires_pane_id() {
+        let err = parse_pane_wait_args(&args(&["--idle"])).unwrap_err();
+        assert!(err.contains("usage: herdr pane wait"));
+    }
+
+    // `--current`/omitted-target hard-error behavior for WRITE commands. These
+    // exercise the shared resolver used by `pane run`, `pane close`,
+    // `pane send-text`, and `pane send-keys`.
+    #[test]
+    fn parse_write_pane_target_current_requires_env_unset() {
+        assert!(
+            super::super::parse_write_pane_target(&args(&["--current"]), None).is_err(),
+            "pane run/close/send-text/send-keys --current must error without HERDR_PANE_ID"
+        );
+    }
+
+    #[test]
+    fn parse_write_pane_target_current_resolves_to_env_when_set() {
+        let (id, consumed) = super::super::parse_write_pane_target(
+            &args(&["--current", "extra"]),
+            Some("issue-1:p1"),
+        )
+        .unwrap();
+        assert_eq!(id, "issue-1:p1");
+        assert_eq!(consumed, 1);
+    }
+
+    #[test]
+    fn parse_write_pane_target_omitted_requires_env_unset() {
+        assert!(
+            super::super::parse_write_pane_target(&args(&[]), None).is_err(),
+            "omitted write target must error without HERDR_PANE_ID"
+        );
+    }
+
+    #[test]
+    fn parse_write_pane_target_omitted_resolves_to_env_when_set() {
+        let (id, consumed) =
+            super::super::parse_write_pane_target(&args(&[]), Some("issue-1:p1")).unwrap();
+        assert_eq!(id, "issue-1:p1");
+        assert_eq!(consumed, 0);
+    }
+
+    #[test]
+    fn parse_write_pane_target_explicit_pane_and_positional() {
+        let (id, consumed) =
+            super::super::parse_write_pane_target(&args(&["--pane", "issue-2"]), None).unwrap();
+        assert_eq!(id, "issue-2");
+        assert_eq!(consumed, 2);
+
+        let (id, consumed) =
+            super::super::parse_write_pane_target(&args(&["issue-3", "rest"]), None).unwrap();
+        assert_eq!(id, "issue-3");
+        assert_eq!(consumed, 1);
+
+        // An unrecognized flag is rejected, not silently treated as text.
+        assert!(super::super::parse_write_pane_target(&args(&["--bogus"]), None).is_err());
     }
 }

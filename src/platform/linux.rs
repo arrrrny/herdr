@@ -90,7 +90,7 @@ fn process_detection_mode() -> ProcessDetectionMode {
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
+    vec![super::user_login_shell().into_os_string(), flag.into(), command.into()]
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -103,7 +103,7 @@ pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::pr
 pub(crate) fn pane_custom_command_pty_builder_platform(
     command: &str,
 ) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
+    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-lc"))
 }
 
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {
@@ -446,6 +446,140 @@ pub fn process_exists(pid: u32) -> bool {
         true
     } else {
         std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+}
+
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// On Linux this reads `/proc/net/unix` to find the socket's inode, then scans
+/// `/proc/*/fd/*` for a matching `socket:[inode]` symlink. Returns `None` if
+/// the path is not a Unix socket, no process owns it, or the path contains
+/// non-UTF8 bytes.
+pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> {
+    let target_path = socket_path.to_str()?;
+    let inode = read_unix_socket_inode(target_path)?;
+    find_pid_holding_socket_inode(inode)
+}
+
+/// Reads `/proc/net/unix` and returns the inode of the Unix domain socket
+/// bound at `socket_path`. The file format is whitespace-separated with the
+/// path as the final column; unnamed sockets have an empty path column.
+///
+/// Lines with fewer than 7 fields (no path) are skipped with `continue` —
+/// using `?` here would abort the entire scan on the first unnamed socket,
+/// which is the common case (most Unix sockets in `/proc/net/unix` are unnamed
+/// client-side connection sockets).
+fn read_unix_socket_inode(socket_path: &str) -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/net/unix").ok()?;
+    // Header: Num RefCount Protocol Flags Type St Inode Path
+    for line in content.lines().skip(1) {
+        let mut parts = line.split_whitespace();
+        // Skip Num, RefCount, Protocol, Flags, Type, St (6 fields). Malformed
+        // lines (fewer than 6 fields) are skipped, not fatal.
+        let mut skipped = 0;
+        while skipped < 6 {
+            if parts.next().is_none() {
+                break;
+            }
+            skipped += 1;
+        }
+        if skipped < 6 {
+            continue;
+        }
+        let Some(inode_str) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue; // unnamed socket — no path column
+        };
+        if path == socket_path {
+            return inode_str.parse().ok();
+        }
+    }
+    None
+}
+
+/// Scans `/proc/*/fd/*` for a symlink target of the form `socket:[inode]` and
+/// returns the PID of the first matching process. Used together with
+/// `read_unix_socket_inode` to locate the owner of a Unix domain socket.
+fn find_pid_holding_socket_inode(inode: u64) -> Option<u32> {
+    let target = format!("socket:[{inode}]");
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let pid: u32 = match entry.file_name().to_str().and_then(|s| s.parse().ok()) {
+            Some(pid) => pid,
+            None => continue,
+        };
+        let fd_dir = entry.path().join("fd");
+        let fd_entries = match std::fs::read_dir(&fd_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue, // not a process dir, or no permission
+        };
+        for fd_entry in fd_entries.flatten() {
+            if let Ok(link) = std::fs::read_link(fd_entry.path()) {
+                if link.to_str() == Some(&target) {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod find_unix_socket_owner_pid_tests {
+    use super::*;
+
+    #[test]
+    fn returns_none_for_missing_path() {
+        let path = std::path::PathBuf::from("/tmp/herdr-does-not-exist-test.sock");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(find_unix_socket_owner_pid(&path), None);
+    }
+
+    #[test]
+    fn finds_owner_pid_of_listening_socket() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/herdr-pid-lookup-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        let pid = find_unix_socket_owner_pid(&path);
+        // The listener is bound by this test process.
+        assert_eq!(pid, Some(std::process::id()));
+
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_none_after_socket_file_removed() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/herdr-pid-lookup-gone-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        }
+        // Listener dropped → socket file may or may not be cleaned up by the OS.
+        // Either way, no process should hold it open now.
+        let _ = std::fs::remove_file(&path);
+        // After removing the file, /proc/net/unix should no longer list this path.
+        assert_eq!(find_unix_socket_owner_pid(&path), None);
     }
 }
 

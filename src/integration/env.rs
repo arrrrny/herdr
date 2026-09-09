@@ -242,6 +242,11 @@ impl Drop for IntegrationEnvLock {
 pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+    // Disable the login-shell PATH fallback while env-mutating tests run
+    // so `command_available` reflects only the test's own `PATH` (set
+    // explicitly inside the test) rather than the dev machine's real
+    // login-shell PATH. See arrrrny/herdr#4 / herdrdev/herdr#2960.
+    super::registry::set_login_shell_path_override_for_test(Some(Vec::new()));
     IntegrationEnvLock {
         _guard: guard,
         #[cfg(windows)]

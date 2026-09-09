@@ -491,6 +491,9 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PluginPaneOpen(_) => "plugin.pane.open",
         Method::PluginPaneFocus(_) => "plugin.pane.focus",
         Method::PluginPaneClose(_) => "plugin.pane.close",
+        Method::BadgeSet(_) => "badge.set",
+        Method::BadgeClear(_) => "badge.clear",
+        Method::BadgeList(_) => "badge.list",
     }
 }
 
@@ -705,6 +708,11 @@ fn stream_subscriptions(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
+    // Capture the live cursor at subscribe time so the stream only delivers
+    // events emitted after this point. Replaying the retained event buffer
+    // (events with a sequence at or below the current one) would re-send stale
+    // workspace/tab/pane lifecycle history to every new subscriber; explicit
+    // replay requires a future cursor/replay parameter and is out of scope.
     let event_start_sequence = event_hub.current_sequence();
     let mut subscriptions = Vec::with_capacity(params.subscriptions.len());
     for (index, subscription) in params.subscriptions.into_iter().enumerate() {

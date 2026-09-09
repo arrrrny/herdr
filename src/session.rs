@@ -269,16 +269,38 @@ fn stop_socket_with_timeout(
         "method": "server.stop",
         "params": {}
     });
-    let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
-        format!(
-            "{label} is not running or cannot be reached at {}: {err}",
-            socket_path.display()
-        )
-    })?;
-    let stop_response = send_stop_request(stream, &request, deadline)?;
-    if let Some(response) = stop_response {
-        if let Some(error) = response.get("error") {
-            return Err(error.to_string());
+    // Try the normal API path first: connect to the status API socket and
+    // send `server.stop`. If the socket is missing or stale (partial-shutdown
+    // state, issue #11), fall back to finding the server PID via a live
+    // client socket and signaling it directly so `herdr server stop` can
+    // recover without a manual kill.
+    match crate::ipc::connect_local_stream(&socket_path) {
+        Ok(stream) => {
+            let stop_response = send_stop_request(stream, &request, deadline)?;
+            if let Some(response) = stop_response {
+                if let Some(error) = response.get("error") {
+                    return Err(error.to_string());
+                }
+            }
+        }
+        Err(err) if stop_socket_connect_error_allows_fallback(err.kind()) => {
+            // Partial-shutdown recovery (issue #11): the status API socket is
+            // missing or stale, but the server process may still be alive on
+            // the client socket. Try to find the server PID and SIGTERM it.
+            let recovered = try_recover_partial_shutdown(&stopped_socket_paths, deadline)?;
+            if !recovered {
+                // No client socket alive either — server is genuinely not running.
+                return Err(format!(
+                    "{label} is not running or cannot be reached at {}: {err}",
+                    socket_path.display()
+                ));
+            }
+        }
+        Err(err) => {
+            return Err(format!(
+                "{label} is not running or cannot be reached at {}: {err}",
+                socket_path.display()
+            ));
         }
     }
     if !wait_until_stopped_until(&stopped_socket_paths, deadline) {
@@ -294,6 +316,85 @@ fn stop_socket_with_timeout(
         ));
     }
     Ok(())
+}
+
+/// Returns true if a missing or stale status API socket should trigger the
+/// partial-shutdown recovery path (find the server PID via the client socket
+/// and SIGTERM it). `NotFound` means the socket file is gone; `ConnectionRefused`
+/// means the socket file exists but nobody is listening (stale); `TimedOut`
+/// means the server isn't accepting in a reasonable time.
+fn stop_socket_connect_error_allows_fallback(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
+/// Attempts to recover from the partial-shutdown state (issue #11) by finding
+/// the server's PID via a live socket and sending SIGTERM. Returns `Ok(true)`
+/// if a live server was found and signaled; `Ok(false)` if no server appears
+/// to be running (no live socket found, or PID lookup unsupported/failed).
+fn try_recover_partial_shutdown(
+    stopped_socket_paths: &[PathBuf],
+    deadline: Instant,
+) -> Result<bool, String> {
+    // Find any socket that's still alive (server is listening on it).
+    let live_socket = stopped_socket_paths
+        .iter()
+        .find(|path| is_running_at(path));
+    let Some(live_socket) = live_socket else {
+        return Ok(false);
+    };
+
+    // Find the PID of the process listening on the live socket.
+    let Some(pid) = crate::platform::find_unix_socket_owner_pid(live_socket) else {
+        return Ok(false);
+    };
+
+    // Don't signal ourselves — this would happen if the test process or a
+    // server running in the same process tried to stop itself via the
+    // fallback path. The normal API path handles same-process stops.
+    if pid == std::process::id() {
+        return Err(format!(
+            "refusing to signal current process (pid {pid}); the server may be this process"
+        ));
+    }
+
+    // Send SIGTERM to the server process. The server's ctrlc handler sets
+    // should_quit and the main loop exits cleanly (complete_shutdown removes
+    // the client socket; api_server Drop removes the API socket).
+    crate::platform::signal_processes(&[pid], crate::platform::Signal::Terminate);
+
+    // Wait for the process to exit (poll process_exists).
+    while Instant::now() < deadline {
+        if !crate::platform::process_exists(pid) {
+            break;
+        }
+        std::thread::sleep(STOP_WAIT_POLL.min(time_until(deadline)));
+    }
+
+    // If the server is still listening after the deadline, recovery failed: it
+    // ignored SIGTERM and survives. Don't remove the socket files — the server
+    // is still running, and removing them would let the caller's
+    // `wait_until_stopped_until` falsely conclude the server stopped. Report
+    // the real failure so the outer timeout path surfaces the error.
+    //
+    // We check socket liveness rather than `process_exists(pid)` because a
+    // cleanly-exited child may linger as a zombie (not yet reaped) and would
+    // otherwise be mistaken for a surviving server.
+    if stopped_socket_paths.iter().any(|path| is_running_at(path)) {
+        return Ok(false);
+    }
+
+    // Clean up any leftover socket files. The server should have removed them
+    // on graceful exit, but if it was killed mid-shutdown they may remain.
+    for path in stopped_socket_paths {
+        let _ = std::fs::remove_file(path);
+    }
+
+    Ok(true)
 }
 
 pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
@@ -615,6 +716,252 @@ mod tests {
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&config_home);
         std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn stop_socket_connect_error_allows_fallback_for_stale_or_missing_socket() {
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::ConnectionRefused,
+            std::io::ErrorKind::TimedOut,
+        ] {
+            let err = std::io::Error::from(kind);
+            assert!(
+                stop_socket_connect_error_allows_fallback(err.kind()),
+                "{kind:?} should allow partial-shutdown fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn stop_socket_connect_error_does_not_fallback_for_permission_denied() {
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(
+            !stop_socket_connect_error_allows_fallback(err.kind()),
+            "PermissionDenied should surface the raw error, not trigger PID-signal fallback"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_recover_partial_shutdown_returns_false_when_no_socket_alive() {
+        let api_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-no-api-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let client_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-no-client-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&api_socket);
+        let _ = std::fs::remove_file(&client_socket);
+        // Neither socket exists → no live socket → Ok(false), no recovery.
+        let recovered = try_recover_partial_shutdown(
+            &[api_socket.clone(), client_socket.clone()],
+            Instant::now() + Duration::from_millis(100),
+        )
+        .unwrap();
+        assert!(!recovered);
+    }
+
+    /// Integration test for issue #11: `herdr server stop` should recover from
+    /// the partial-shutdown state where the API socket is missing but a server
+    /// process is still alive on the client socket. Spawns a child Python
+    /// process that binds a Unix socket (simulating the surviving server),
+    /// leaves the API socket path empty, and verifies that
+    /// `stop_socket_with_timeout` finds the child PID and SIGTERMs it.
+    #[cfg(unix)]
+    #[test]
+    fn stop_socket_with_timeout_recovers_partial_shutdown_via_sigterm() {
+        use std::process::{Command, Stdio};
+
+        let python = ["python3", "python"]
+            .iter()
+            .find(|cmd| Command::new(cmd).arg("--version").output().is_ok());
+        let Some(python) = python else {
+            // Python isn't installed — skip the integration test rather than fail.
+            eprintln!("stop_socket_with_timeout_recovers_partial_shutdown_via_sigterm: python3 not found, skipping");
+            return;
+        };
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let api_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-api-{stamp}-{}.sock",
+            std::process::id()
+        ));
+        let client_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-client-{stamp}-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&api_socket);
+        let _ = std::fs::remove_file(&client_socket);
+
+        // Spawn a child that binds the "client" socket and accepts connections
+        // until SIGTERM arrives (python's default handler exits the process).
+        let script = format!(
+            r#"
+import os, signal, socket, sys, time
+path = sys.argv[1]
+if os.path.exists(path):
+    os.unlink(path)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+s.listen(5)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+while True:
+    conn, _ = s.accept()
+    conn.close()
+"#,
+        );
+        let mut child = Command::new(python)
+            .arg("-c")
+            .arg(&script)
+            .arg(client_socket.to_str().unwrap())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn python child");
+
+        // Wait for the child to bind the socket (poll up to 2s).
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < ready_deadline {
+            if is_running_at(&client_socket) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            is_running_at(&client_socket),
+            "child failed to bind client socket"
+        );
+        // API socket is intentionally absent — this is the partial-shutdown
+        // state from issue #11.
+        assert!(!api_socket.exists());
+
+        let result = stop_socket_with_timeout(
+            api_socket.clone(),
+            vec![api_socket.clone(), client_socket.clone()],
+            Duration::from_secs(5),
+            "test server",
+        );
+
+        // The fallback should succeed — child was found and SIGTERM'd.
+        assert!(result.is_ok(), "fallback failed: {:?}", result.err());
+
+        // The child process should have exited (either gracefully via its
+        // SIGTERM handler, like the real herdr server's ctrlc handler, or
+        // killed by signal). The important thing is that it stopped.
+        let child_status = child.try_wait().expect("child not waited on");
+        assert!(child_status.is_some(), "child still running after stop");
+
+        // Sockets should be cleaned up.
+        assert!(!client_socket.exists() || !is_running_at(&client_socket));
+        let _ = std::fs::remove_file(&api_socket);
+        let _ = std::fs::remove_file(&client_socket);
+    }
+
+    /// Regression test for the kimi.ai review finding on PR #19:
+    /// `try_recover_partial_shutdown` must NOT report success (or remove the
+    /// socket files) when the signaled process ignores SIGTERM and survives
+    /// past the deadline. Reporting success there lets the caller's
+    /// `wait_until_stopped_until` falsely believe the server stopped, while
+    /// it is actually still running.
+    #[cfg(unix)]
+    #[test]
+    fn try_recover_partial_shutdown_returns_false_when_process_ignores_sigterm() {
+        use std::process::{Command, Stdio};
+
+        let python = ["python3", "python"]
+            .iter()
+            .find(|cmd| Command::new(cmd).arg("--version").output().is_ok());
+        let Some(python) = python else {
+            // Python isn't installed — skip the integration test rather than fail.
+            eprintln!("try_recover_partial_shutdown_returns_false_when_process_ignores_sigterm: python3 not found, skipping");
+            return;
+        };
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let client_socket = PathBuf::from(format!(
+            "/tmp/herdr-stop-ignore-{stamp}-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&client_socket);
+
+        // Child binds the socket and ignores SIGTERM — it survives the signal.
+        let script = format!(
+            r#"
+import os, signal, socket, sys
+path = sys.argv[1]
+if os.path.exists(path):
+    os.unlink(path)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(path)
+s.listen(5)
+while True:
+    conn, _ = s.accept()
+    conn.close()
+"#,
+        );
+        let mut child = Command::new(python)
+            .arg("-c")
+            .arg(&script)
+            .arg(client_socket.to_str().unwrap())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn python child");
+
+        // Wait for the child to bind the socket (poll up to 2s).
+        let ready_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < ready_deadline {
+            if is_running_at(&client_socket) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            is_running_at(&client_socket),
+            "child failed to bind client socket"
+        );
+
+        let recovered = try_recover_partial_shutdown(
+            &[client_socket.clone()],
+            Instant::now() + Duration::from_millis(500),
+        )
+        .unwrap();
+
+        // The process survived SIGTERM, so recovery must report failure.
+        assert!(
+            !recovered,
+            "should return false when process ignores SIGTERM"
+        );
+
+        // The socket file must NOT be removed — the server is still running.
+        assert!(
+            client_socket.exists(),
+            "socket file must not be removed when recovery fails"
+        );
+
+        child.kill().expect("kill child");
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&client_socket);
     }
 
     #[test]
