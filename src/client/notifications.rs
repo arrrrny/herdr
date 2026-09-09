@@ -29,9 +29,11 @@ pub(super) fn handle_shell_notification_effects(
                 body,
                 click_target,
             } => {
-                if let Err(err) =
-                    crate::platform::show_desktop_notification(&title, body.as_deref(), click_target.as_deref())
-                {
+                if let Err(err) = crate::platform::show_desktop_notification(
+                    &title,
+                    body.as_deref(),
+                    click_target.as_deref(),
+                ) {
                     warn!(err = %err, "failed to emit system notification");
                 }
             }
