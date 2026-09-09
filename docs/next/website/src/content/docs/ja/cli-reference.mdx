@@ -66,6 +66,22 @@ herdr machine remove <profile-id>
 
 ワークスペース、タブ、ペインの ID とエージェント名は、1 つのサーバー内だけで有効です。UI でマシンを選んでも、既存ペイン内のコマンドが継承するセッションやソケットは変わりません。リモート自動化では対象ホスト上の対象セッションに対して CLI を実行し、そこで ID を取得してください。
 
+## バッジ
+
+```bash
+herdr badge set --key KEY --text TEXT --color COLOR
+herdr badge clear --key KEY
+herdr badge list
+```
+
+`herdr badge` は、バイナリに組み込まれたカスタムバッジシステムを CLI 動詞として公開します。バッジはアプリ全体で共有されます。キー付きで、同じキーを設定すると前のバッジが置き換わり、異なるキーは複数並んで表示されます。サイドバーのヘッダーに描画されます。
+
+- `herdr badge set --key KEY --text TEXT --color COLOR` は `KEY` のバッジを設定または置き換えます。`--text` はサイドバーに表示されるラベル、`--color` は Herdr の色文字列（hex、`rgb(...)`、名前付きカラー、`reset`）です。
+- `herdr badge clear --key KEY` は `KEY` のバッジを削除します。存在しないキーの削除は成功として返される no-op です。
+- `herdr badge list` はメモリ内（IPC 設定済み）のバッジを JSON で表示します。`run/badge.json` から読み込まれるファイル由来のバッジは含まれません。ファイル由来のバッジは描画のたびに新しく読み込まれます。
+
+各コマンドはソケット API からの生の JSON 応答を表示します（統合機能が使うのと同じ `badge.set`、`badge.clear`、`badge.list` メソッドです）。
+
 ## シェル補完
 
 ```bash
