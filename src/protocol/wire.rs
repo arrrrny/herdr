@@ -940,7 +940,9 @@ pub struct ClientShellSnapshot {
     pub agents: Vec<ClientShellAgent>,
     pub commands: Vec<ClientShellCommand>,
     /// Custom badges shown in the sidebar header, from `run/badge.json`
-    /// merged with IPC-set badges.
+    /// merged with IPC-set badges. Absent in generation-1 snapshots;
+    /// defaults to no badges.
+    #[serde(default)]
     pub badges: Vec<ClientShellBadge>,
 }
 
