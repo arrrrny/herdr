@@ -10,6 +10,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(all(test, unix))]
 use std::fs;
 
+use crate::api::http_push;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, Method, Request, ResponseResult, ServerCapabilities, SuccessResponse,
 };
@@ -36,6 +37,7 @@ pub struct ServerHandle {
     path: PathBuf,
     identity: SocketFileIdentity,
     running: Arc<AtomicBool>,
+    _http_push: Option<crate::api::http_push::HttpPushServerHandle>,
 }
 
 impl Drop for ServerHandle {
@@ -90,6 +92,20 @@ fn start_server_inner(
 
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
+
+    // Agent state-report push listener (Ziki contract §2). Fail-soft: a bind
+    // failure only logs — agents fall back to screen-marker/OSC detection.
+    let http_push = match http_push::resolved_http_push_listen_addr() {
+        Some(addr) => match http_push::start_http_push_server(api_tx.clone(), addr) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                warn!(addr = %addr, err = %err, "agent push http server failed to start");
+                None
+            }
+        },
+        None => None,
+    };
+
     let thread = std::thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
@@ -126,6 +142,7 @@ fn start_server_inner(
         path,
         identity,
         running,
+        _http_push: http_push,
     })
 }
 

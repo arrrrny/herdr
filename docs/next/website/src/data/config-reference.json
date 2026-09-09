@@ -27,6 +27,12 @@
           "type": "integer",
           "default": "40",
           "description": "Virtual terminal height used for layout and newly created panes when no client is attached. Must be greater than zero."
+        },
+        {
+          "key": "server.agent_push_listen_addr",
+          "type": "string",
+          "default": "\"127.0.0.1:7878\"",
+          "description": "Bind address for the HTTP listener that accepts agent state-report pushes (`POST /api/v1/pane/report/agent`, the Ziki agent-state contract). Set to `\"\"` to disable the listener. The endpoint is unauthenticated and has no pane-ownership check, so it must stay on loopback: only `127.0.0.1`/`::1` (or a `localhost` hostname that resolves to them) are accepted, and any non-loopback value is rejected with a warning and disables the listener. Do not bind to `0.0.0.0` or a public interface. A bind failure is non-fatal: Herdr logs a warning and agents fall back to screen-marker and OSC-title detection."
         }
       ]
     },

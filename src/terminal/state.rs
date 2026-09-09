@@ -955,6 +955,25 @@ impl TerminalState {
             };
         }
 
+        // Ziki's contract (specs/011-herdr-ziki-state-sync §2 on the ziki repo)
+        // has no separate session-start push: the state report itself carries
+        // the session identity. When no anchor exists yet for this source and
+        // the reporting process is the pane's foreground agent, anchor the
+        // report directly instead of suppressing it as a pending replacement —
+        // there is no session-start push that would later promote it.
+        if crate::agent_resume::state_report_carries_session_start(source, agent_label)
+            && process_present
+            && anchored_session_ref.is_none()
+            && session_ref.is_some()
+            && !self
+                .suppressed_full_lifecycle_hook_reports
+                .contains_key(source)
+        {
+            return FullLifecycleHookReportRoute::Accept {
+                reanchor_sequence: false,
+            };
+        }
+
         let Some(session_ref) = session_ref.clone() else {
             return FullLifecycleHookReportRoute::Ignore;
         };

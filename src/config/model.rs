@@ -1007,6 +1007,13 @@ pub struct ServerConfig {
     pub headless_cols: u16,
     /// Virtual terminal height used when no client is attached. Default: 40.
     pub headless_rows: u16,
+    /// Bind address ("host:port") for the HTTP agent-report push listener that
+    /// accepts `POST /api/v1/pane/report/agent` pushes (the Ziki contract's
+    /// authoritative state path; default `http://localhost:7878` on the client
+    /// side). Default: "127.0.0.1:7878". Set to "" to disable the listener;
+    /// a bind failure is non-fatal and only logs a warning, because agents fall
+    /// back to screen-marker and OSC-title detection.
+    pub agent_push_listen_addr: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1276,6 +1283,8 @@ impl Default for ServerConfig {
         Self {
             headless_cols: crate::config::DEFAULT_HEADLESS_COLS,
             headless_rows: crate::config::DEFAULT_HEADLESS_ROWS,
+            agent_push_listen_addr: crate::api::http_push::DEFAULT_HTTP_PUSH_LISTEN_ADDR
+                .to_string(),
         }
     }
 }
