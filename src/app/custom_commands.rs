@@ -252,6 +252,18 @@ impl App {
                 current_exe.display().to_string(),
             ));
         }
+        // Prepend the user's login-shell PATH (resolved once and cached) so
+        // bindings invoking user-installed binaries keep working when the
+        // server runs under brew services / launchd with a stripped process
+        // PATH. The inherited PATH is kept as a suffix; probe failure leaves
+        // PATH untouched (arrrrny/herdr#4, herdrdev/herdr#2960).
+        let login_entries = crate::integration::cached_login_shell_path();
+        if let Some(combined) = crate::integration::combined_login_shell_path(
+            &login_entries,
+            std::env::var_os("PATH").as_deref(),
+        ) {
+            env.push(("PATH".to_string(), combined));
+        }
 
         let mut cwd = None;
         if let Some(ws_idx) = self.state.active {
