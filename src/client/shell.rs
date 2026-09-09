@@ -54,9 +54,9 @@ use crate::config::{
     TabBarPositionConfig,
 };
 use crate::protocol::{
-    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellSnapshot, ClientShellTab,
-    ClientShellWorkspace, ClientSurfaceSize, FrameData, PaneSurfaceFrame, SemanticNotification,
-    SemanticNotificationKind, SemanticNotificationSound,
+    ClientMessage, ClientMousePosition, ClientPaneInputEvent, ClientShellBadge,
+    ClientShellSnapshot, ClientShellTab, ClientShellWorkspace, ClientSurfaceSize, FrameData,
+    PaneSurfaceFrame, SemanticNotification, SemanticNotificationKind, SemanticNotificationSound,
 };
 #[cfg(test)]
 use crate::raw_input::RawInputEvent;

@@ -73,6 +73,21 @@ impl BadgeStore {
         self.badges.remove(key)
     }
 
+    /// Remove all in-memory badges.
+    pub fn clear_all(&mut self) {
+        self.badges.clear();
+    }
+
+    /// Number of in-memory badges.
+    pub fn len(&self) -> usize {
+        self.badges.len()
+    }
+
+    /// Whether the in-memory store has no badges.
+    pub fn is_empty(&self) -> bool {
+        self.badges.is_empty()
+    }
+
     /// Iterate over (key, badge) pairs in stable (alphabetical) order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Badge)> {
         self.badges.iter().map(|(k, v)| (k.as_str(), v))

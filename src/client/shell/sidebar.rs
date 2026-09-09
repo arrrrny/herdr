@@ -180,6 +180,45 @@ pub(crate) fn render_collapsed_sidebar(
     );
 }
 
+/// Render custom badges in the sidebar header row, to the right of the
+/// " spaces" label. The endpoint merges `run/badge.json` file badges with
+/// in-memory IPC-set badges (`badge.set` JSON-RPC method) before projecting
+/// them; in-memory wins on key conflict. Each badge renders as `[text]` with
+/// the badge color applied to the foreground. Text is truncated if too long.
+fn render_sidebar_header_badges(buffer: &mut Buffer, area: Rect, badges: &[ClientShellBadge]) {
+    use crate::badges;
+
+    const HEADER_LABEL_WIDTH: u16 = 7; // " spaces"
+    let badge_area_x = area.x.saturating_add(HEADER_LABEL_WIDTH);
+    let badge_area_width = area.width.saturating_sub(HEADER_LABEL_WIDTH);
+    if badge_area_width == 0 || badges.is_empty() {
+        return;
+    }
+
+    let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+    for badge in badges.iter().take(badges::MAX_RENDERED_BADGES) {
+        let text = badges::truncate_text(&badge.text, badges::MAX_BADGE_TEXT_LEN);
+        if text.is_empty() {
+            continue;
+        }
+        if !spans.is_empty() {
+            spans.push(ratatui::text::Span::raw(" "));
+        }
+        spans.push(ratatui::text::Span::raw("["));
+        spans.push(ratatui::text::Span::styled(
+            text,
+            badges::resolve_style(&badge.color),
+        ));
+        spans.push(ratatui::text::Span::raw("]"));
+    }
+    if spans.is_empty() {
+        return;
+    }
+
+    Paragraph::new(Line::from(spans))
+        .render(Rect::new(badge_area_x, area.y, badge_area_width, 1), buffer);
+}
+
 pub(crate) fn render_sidebar(
     buffer: &mut Buffer,
     area: Rect,
@@ -209,6 +248,7 @@ pub(crate) fn render_sidebar(
             .fg(palette.overlay0)
             .add_modifier(Modifier::BOLD),
     );
+    render_sidebar_header_badges(buffer, workspace_area, &snapshot.badges);
 
     let entries = workspace_entries(snapshot, state.collapsed_groups);
     let body = Rect::new(
