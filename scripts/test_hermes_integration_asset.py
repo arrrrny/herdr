@@ -25,7 +25,10 @@ class FakeContext:
 
 
 class HermesIntegrationAssetTests(unittest.TestCase):
-    def test_reports_only_root_session_identity(self):
+    def test_reports_interactive_session_identity(self):
+        """Fork behavior (arrrrny/herdr#25): resumed sessions are reported
+        for every interactive platform (tui/desktop/acp/cli), not just cli,
+        with per platform:start_source dedup."""
         module = load_asset()
         calls = []
         module._send_session = lambda session_id, start_source: calls.append(
@@ -41,13 +44,22 @@ class HermesIntegrationAssetTests(unittest.TestCase):
 
         context.hooks["on_session_start"](session_id="root-1", platform="tui")
         context.hooks["pre_llm_call"](session_id="root-1", platform="tui")
+        context.hooks["pre_llm_call"](session_id="root-1", platform="tui")
         context.hooks["pre_llm_call"](session_id="child", platform="subagent")
         context.hooks["on_session_reset"](session_id="root-2", platform="tui")
         context.hooks["pre_llm_call"](
             session_id="background", platform="tui"
         )
 
-        self.assertEqual(calls, [("root-1", "startup"), ("root-2", "new")])
+        self.assertEqual(
+            calls,
+            [
+                ("root-1", "startup"),
+                ("root-1", "resume"),
+                ("root-2", "new"),
+                ("background", "resume"),
+            ],
+        )
 
     def test_send_session_uses_cli_with_the_active_pane(self):
         module = load_asset()

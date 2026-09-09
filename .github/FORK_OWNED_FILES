@@ -31,6 +31,10 @@ src/platform/macos.rs                         ::  notification_click_target.json
 # Badge store + `herdr badge` CLI verb (arrrrny/herdr#16, #31)
 src/badges.rs                                 ::  badge.set
 src/cli.rs                                    ::  mod badge
+# Badge projection/render in the client-shell architecture
+src/protocol/wire.rs                          ::  ClientShellBadge
+src/server/client_shell.rs                    ::  merge_badges
+src/client/shell/sidebar.rs                   ::  render_sidebar_header_badges
 
 # Agent wait hardening (arrrrny/herdr#18, #21)
 src/api/wait.rs                               ::  accept_transient_status
@@ -46,6 +50,7 @@ src/api/server.rs                             ::  current_sequence
 
 # Hermes reports TUI resume session (arrrrny/herdr#25)
 src/integration/assets/hermes/__init__.py     ::  resume
+scripts/test_hermes_integration_asset.py      ::  ("root-1", "resume")
 
 # Server partial-shutdown recovery (arrrrny/herdr#19)
 src/session.rs                                ::  try_recover_partial_shutdown
