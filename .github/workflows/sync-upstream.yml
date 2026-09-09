@@ -152,7 +152,7 @@ jobs:
               MISSING+=("$path")
               continue
             fi
-            if ! grep -q -F "$marker" "$path"; then
+            if ! grep -q -F -e "$marker" "$path"; then
               MARKER_MISSING+=("$path (missing marker: $marker)")
             fi
           done < .github/FORK_OWNED_FILES
