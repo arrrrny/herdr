@@ -12,9 +12,12 @@
 # macOS notification click -> focus pane (arrrrny/herdr#27, #34)
 src/cli/notification_click.rs                ::  arrrrny/herdr#27
 
-# login-shell PATH for custom commands / integrations (arrrrny/herdr#4)
+# login-shell PATH for custom commands / integrations (arrrrny/herdr#4, #12)
+# NOTE: the old src/app/input/navigate.rs entry moved here; upstream deleted
+# navigate.rs and the #12 PATH-prepend env now lives behind the #17 login-shell
+# spawn path, guarded by the runtime/registry/env entries below.
 src/app/runtime.rs                            ::  arrrrny/herdr#4
-src/app/input/navigate.rs                     ::  arrrrny/herdr#12
+src/app/custom_commands.rs                    ::  custom_command_env
 src/integration/registry.rs                   ::  arrrrny/herdr#4
 src/integration/env.rs                        ::  arrrrny/herdr#4
 
@@ -23,11 +26,31 @@ src/terminal/state.rs                         ::  arrrrny/herdr#1
 src/pane.rs                                   ::  arrrrny/herdr#1
 
 # macOS terminal-notifier click target marker (arrrrny/herdr#34)
-src/platform/macos.rs                         ::  arrrrny/herdr#34
+src/platform/macos.rs                         ::  notification_click_target.json
 
-# Badge CLI verb dispatch (arrrrny/herdr#31)
-src/cli.rs                                    ::  arrrrny/herdr#27
+# Badge store + `herdr badge` CLI verb (arrrrny/herdr#16, #31)
+src/badges.rs                                 ::  badge.set
+src/cli.rs                                    ::  mod badge
 
-# Ziki agent manifest (arrrrny fork-specific detection)
+# Agent wait hardening (arrrrny/herdr#18, #21)
+src/api/wait.rs                               ::  accept_transient_status
+
+# PTY full-input chunking, no 1024-byte truncation (arrrrny/herdr#20)
+src/pty/actor/unix.rs                         ::  PTY_WRITE_CHUNK_BYTES
+
+# --current hard error when HERDR_PANE_ID unset (arrrrny/herdr#22)
+src/cli/pane.rs                               ::  --current requires HERDR_PANE_ID
+
+# events.subscribe starts at live events, no retained replay (arrrrny/herdr#24)
+src/api/server.rs                             ::  current_sequence
+
+# Hermes reports TUI resume session (arrrrny/herdr#25)
+src/integration/assets/hermes/__init__.py     ::  resume
+
+# Server partial-shutdown recovery (arrrrny/herdr#19)
+src/session.rs                                ::  try_recover_partial_shutdown
+
+# Ziki agent detection + state push listener (arrrrny/herdr#36, #37)
 src/detect/manifests/ziki.toml                ::  arrrrny/ziki
-website/agent-detection/ziki.toml             ::  arrrrny/ziki
+distribution/agent-detection/ziki.toml        ::  arrrrny/ziki
+src/api/http_push.rs                          ::  011-herdr-ziki-state-sync
