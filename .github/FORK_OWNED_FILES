@@ -56,3 +56,7 @@ src/session.rs                                ::  try_recover_partial_shutdown
 src/detect/manifests/ziki.toml                ::  arrrrny/ziki
 distribution/agent-detection/ziki.toml        ::  arrrrny/ziki
 src/api/http_push.rs                          ::  011-herdr-ziki-state-sync
+
+# Pending-release labeling: built-in token, labels and comments, never closes;
+# closing stays with release.yml once the release exists.
+.github/workflows/label-next-release-issues.yml  ::  fork: upstream uses secrets.KANGAL_GITHUB_TOKEN
