@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Using GitHub token for $(gh api user --jq .login)."
+          echo "Using GitHub token for $(gh api "repos/${GITHUB_REPOSITORY}" --jq .full_name)."
 
           BEFORE="${{ github.event.before }}"
           AFTER="${{ github.sha }}"
