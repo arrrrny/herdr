@@ -36,9 +36,6 @@ src/protocol/wire.rs                          ::  ClientShellBadge
 src/server/client_shell.rs                    ::  merge_badges
 src/client/shell/sidebar.rs                   ::  render_sidebar_header_badges
 
-# Agent wait hardening (arrrrny/herdr#18, #21)
-src/api/wait.rs                               ::  accept_transient_status
-
 # PTY full-input chunking, no 1024-byte truncation (arrrrny/herdr#20)
 src/pty/actor/unix.rs                         ::  PTY_WRITE_CHUNK_BYTES
 
