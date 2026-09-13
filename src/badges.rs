@@ -73,17 +73,20 @@ impl BadgeStore {
         self.badges.remove(key)
     }
 
-    /// Remove all in-memory badges.
+    /// Remove all in-memory badges. Test-only; production clears keys individually.
+    #[cfg(test)]
     pub fn clear_all(&mut self) {
         self.badges.clear();
     }
 
     /// Number of in-memory badges.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.badges.len()
     }
 
     /// Whether the in-memory store has no badges.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.badges.is_empty()
     }

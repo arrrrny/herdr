@@ -70,7 +70,7 @@ jobs:
         run: |
           set +e
           git merge upstream/master --no-edit \
-            -m "merge: sync upstream $(date +%Y-%m-%d)"
+            -m "chore: sync upstream $(date +%Y-%m-%d)"
           rc=$?
           set -e
           if [ $rc -eq 0 ]; then
