@@ -663,6 +663,24 @@ struct PtyOutput {
     bytes: Vec<u8>,
     // Keep legacy raw-string watermarks stable even across split UTF-8 reads.
     text: String,
+    // Screen text paired with the buffer length it was rendered from.
+    rendered_screen: Option<(usize, String)>,
+}
+
+impl PtyOutput {
+    /// Screen text at 80x24, re-parsed only when new bytes have arrived.
+    /// `terminal_screen::text` builds a fresh terminal and re-parses the buffer
+    /// from byte zero, so reuse the cached render while the length is unchanged.
+    fn rendered_screen(&mut self) -> String {
+        if let Some((len, text)) = &self.rendered_screen {
+            if *len == self.bytes.len() {
+                return text.clone();
+            }
+        }
+        let text = terminal_screen::text(&self.bytes, 80, 24);
+        self.rendered_screen = Some((self.bytes.len(), text.clone()));
+        text
+    }
 }
 
 type SharedOutput = std::sync::Arc<Mutex<PtyOutput>>;
@@ -938,12 +956,10 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     );
     let output = spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
     let screen_text = || {
-        let bytes = output
+        output
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .bytes
-            .clone();
-        terminal_screen::text(&bytes, 80, 24)
+            .rendered_screen()
     };
     assert!(
         wait_until(Duration::from_secs(12), Duration::from_millis(20), || {

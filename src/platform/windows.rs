@@ -204,9 +204,11 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&std::path::Path>,
-    temporary: &std::path::Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name.
     use std::io::Write;
     if source.is_some() {
         // If preparation finds an existing file, leave it to the recovery-backed
@@ -216,10 +218,6 @@ pub(crate) fn write_config_temporary(
             "config appeared while preparing a new file; retry the update",
         ));
     }
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     output.write_all(contents)?;
     output.sync_all()
 }
@@ -1440,7 +1438,7 @@ fn select_pane_foreground_job(
 }
 
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
-    crate::detect::identify_agent(&entry.name).is_some()
+    crate::detect::identify_agent_for_process(&foreground_process_from_entry(entry)).is_some()
         || crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
 }
 

@@ -86,7 +86,8 @@ def acquire_package(package: dict[str, Any], package_path: Path) -> None:
             except urllib.error.HTTPError as error:
                 if error.code < 500 or attempt == 2:
                     raise
-                error.close()
+                if error.fp is not None:
+                    error.fp.close()
                 time.sleep(2**attempt)
     actual = sha256_file(package_path)
     if actual != package["sha256"]:

@@ -252,30 +252,38 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
+/// Identify the agent behind a foreground process, returning its normalized name.
+/// A `letta` process with no interactive session is not an agent pane: a one-shot
+/// `letta run`/`letta --print` invocation must not count, and name-only call sites
+/// would otherwise disagree with the job-based lookup.
+pub fn identify_agent_for_process(
+    process: &crate::platform::ForegroundProcess,
+) -> Option<(Agent, String)> {
+    let candidate = normalized_process_name(process);
+    let agent = identify_agent(&candidate)?;
+    if agent == Agent::Letta && !is_interactive_letta_process(process) {
+        return None;
+    }
+    Some((agent, candidate))
+}
+
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
     if let Some(process) = job
         .processes
         .iter()
         .find(|process| process.pid == job.process_group_id)
     {
-        let candidate = normalized_process_name(process);
-        if let Some(agent) = identify_agent(&candidate) {
-            if agent != Agent::Letta || is_interactive_letta_process(process) {
-                return Some((agent, candidate));
-            }
+        if let Some(found) = identify_agent_for_process(process) {
+            return Some(found);
         }
     }
 
     let mut best: Option<(u8, Agent, String)> = None;
 
     for process in &job.processes {
-        let candidate = normalized_process_name(process);
-        let Some(agent) = identify_agent(&candidate) else {
+        let Some((agent, candidate)) = identify_agent_for_process(process) else {
             continue;
         };
-        if agent == Agent::Letta && !is_interactive_letta_process(process) {
-            continue;
-        }
         let score = process_priority(process, &candidate);
 
         match &best {

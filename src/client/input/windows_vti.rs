@@ -1,4 +1,4 @@
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use std::collections::VecDeque;
 #[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +68,7 @@ fn process_platform_input_items(
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn push_platform_input_events(
     events: Vec<crate::protocol::ClientInputEvent>,
     handoff: &mut WindowsInputHandoff,
@@ -113,21 +113,21 @@ enum WindowsInputItems {
     Closed,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[derive(Default)]
 struct WindowsInputTraceBatch {
     raw_keys: Vec<WindowsKeyRecord>,
     mapped_event_groups: Vec<Vec<crate::protocol::ClientInputEvent>>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 #[derive(Default)]
 struct WindowsInputHandoff {
     pending: VecDeque<Vec<crate::protocol::ClientInputEvent>>,
     backpressured: bool,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 impl WindowsInputHandoff {
     fn push(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
         if events.is_empty() {
@@ -140,6 +140,7 @@ impl WindowsInputHandoff {
         }
     }
 
+    #[cfg(windows)]
     fn try_flush(&mut self, event_tx: &mpsc::Sender<ClientLoopEvent>) -> bool {
         // Keep draining the console while the client loop is busy. Blocking here
         // lets the OpenSSH/ConPTY input path lose pieces of raw VT reports.
@@ -183,7 +184,7 @@ impl WindowsInputHandoff {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_mouse_motion_can_replace(
     previous: &crate::protocol::ClientInputEvent,
     next: &crate::protocol::ClientInputEvent,
@@ -1586,7 +1587,6 @@ mod tests {
         .collect()
     }
 
-    #[cfg(windows)]
     #[test]
     fn windows_input_trace_preserves_mapped_event_groups() {
         let groups = vec![
@@ -1604,6 +1604,7 @@ mod tests {
         }
         push_platform_input_events(Vec::new(), &mut handoff, Some(&mut trace));
 
+        assert!(trace.raw_keys.is_empty());
         assert_eq!(trace.mapped_event_groups, groups);
         assert_eq!(handoff.pending, VecDeque::from(groups));
     }

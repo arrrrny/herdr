@@ -3145,6 +3145,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_INTEGRATION_VERSION,
         ),
         ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
+        ("letta", LETTA_HOOK_ASSET, LETTA_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -3625,6 +3626,50 @@ fn install_and_uninstall_letta_preserve_unrelated_settings_and_hooks() {
     let remaining = settings["hooks"]["SessionStart"].as_array().unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0]["hooks"][0]["command"], "echo user");
+
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
+fn install_letta_keeps_a_symlinked_settings_file() {
+    use std::os::unix::fs::symlink;
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let letta_dir = home.join(".letta");
+    fs::create_dir_all(&letta_dir).unwrap();
+    let shared_dir = base.join("shared");
+    fs::create_dir_all(&shared_dir).unwrap();
+    let shared_settings = shared_dir.join("settings.json");
+    fs::write(&shared_settings, r#"{"theme":"dark"}"#).unwrap();
+    let settings_path = letta_dir.join("settings.json");
+    symlink(&shared_settings, &settings_path).unwrap();
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &home);
+
+    install_letta().unwrap();
+
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "install must update the linked config instead of replacing the symlink"
+    );
+    let settings: Value =
+        serde_json::from_str(&fs::read_to_string(&shared_settings).unwrap()).unwrap();
+    assert_eq!(settings["theme"], "dark");
+    assert_eq!(
+        settings["hooks"]["SessionStart"].as_array().unwrap().len(),
+        1
+    );
 
     if let Some(home) = previous_home {
         std::env::set_var("HOME", home);

@@ -107,23 +107,6 @@ pub(crate) fn launch_executable() -> std::io::Result<PathBuf> {
     Ok(executable)
 }
 
-pub(crate) fn config_file_link_count(path: &std::path::Path) -> std::io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-pub(crate) fn write_existing_config(
-    _target: &std::path::Path,
-    _contents: &[u8],
-) -> std::io::Result<bool> {
-    // Unix keeps atomic replacement for existing files too.
-    Ok(false)
-}
-
 pub(crate) fn create_config_temporary(
     path: &std::path::Path,
     private: bool,
@@ -138,14 +121,13 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&std::path::Path>,
-    temporary: &std::path::Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name, which a local actor with write
+    // access to the config directory could have swapped for a symlink in between.
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     if let Some(source) = source {
         let input = std::fs::File::open(source)?;
         let metadata = input.metadata()?;
@@ -170,21 +152,31 @@ pub(crate) fn write_config_temporary(
 fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> {
     use std::ffi::CStr;
     fn names(fd: RawFd) -> std::io::Result<Vec<u8>> {
-        let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
-        if size < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ENOTSUP) {
-                return Ok(Vec::new());
+        // The list can grow between the size probe and the read.
+        for _ in 0..2 {
+            let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+            if size < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ENOTSUP) {
+                    return Ok(Vec::new());
+                }
+                return Err(error);
             }
-            return Err(error);
+            let mut buffer = vec![0; size as usize];
+            let read = unsafe { libc::flistxattr(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if read < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ERANGE) {
+                    continue;
+                }
+                return Err(error);
+            }
+            buffer.truncate(read as usize);
+            return Ok(buffer);
         }
-        let mut buffer = vec![0; size as usize];
-        let read = unsafe { libc::flistxattr(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
-        if read < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        buffer.truncate(read as usize);
-        Ok(buffer)
+        Err(std::io::Error::other(
+            "extended attribute list kept changing while copying config metadata",
+        ))
     }
     fn value(fd: RawFd, name: &CStr) -> std::io::Result<Vec<u8>> {
         let size = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
@@ -200,6 +192,20 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
         buffer.truncate(read as usize);
         Ok(buffer)
     }
+    // Security labels and capabilities live in privileged namespaces that an
+    // unprivileged process cannot write; the inherited value is left in place.
+    fn is_privileged_name(name: &CStr) -> bool {
+        let name = name.to_bytes();
+        !(name.starts_with(b"user.") || name == b"system.posix_acl_access")
+    }
+    fn is_tolerable(error: &std::io::Error, name: &CStr) -> bool {
+        match error.raw_os_error() {
+            // The attribute is already absent, which is the desired end state.
+            Some(libc::ENODATA) => true,
+            Some(libc::EPERM) | Some(libc::EACCES) => is_privileged_name(name),
+            _ => false,
+        }
+    }
     let source_names = names(source)?;
     for bytes in names(destination)?.split_inclusive(|byte| *byte == 0) {
         if !source_names
@@ -208,7 +214,10 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
         {
             let name = CStr::from_bytes_with_nul(bytes).map_err(std::io::Error::other)?;
             if unsafe { libc::fremovexattr(destination, name.as_ptr()) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                let error = std::io::Error::last_os_error();
+                if !is_tolerable(&error, name) {
+                    return Err(error);
+                }
             }
         }
     }
@@ -229,7 +238,10 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
             )
         } != 0
         {
-            return Err(std::io::Error::last_os_error());
+            let error = std::io::Error::last_os_error();
+            if !is_tolerable(&error, name) {
+                return Err(error);
+            }
         }
     }
     Ok(())

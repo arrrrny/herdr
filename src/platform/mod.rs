@@ -353,7 +353,8 @@ mod remote_bridge_tests;
 mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, check_config_write_target, config_file_link_count, end_cli_output,
+    forward_remote_bridge_stdio, write_existing_config, RemoteBridgeWake,
 };
 
 mod client_state;

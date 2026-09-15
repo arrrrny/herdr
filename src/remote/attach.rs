@@ -715,16 +715,31 @@ impl RemoteSsh {
     }
 
     fn copy_windows_file(&self, source_path: &Path, remote_path: &str) -> io::Result<()> {
-        let status = self
-            .scp_command()
+        let mut command = self.scp_command();
+        if self.noninteractive {
+            apply_noninteractive_ssh_options(&mut command);
+        }
+        command
             .arg(source_path)
             .arg(windows_scp_target(&self.target, remote_path))
-            .status()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = command
+            .spawn()
             .map_err(|err| io::Error::new(err.kind(), format!("failed to start scp: {err}")))?;
-        if status.success() {
+        let output = if self.noninteractive {
+            wait_with_output_timeout(child, NONINTERACTIVE_SSH_COMMAND_TIMEOUT)?
+        } else {
+            output_with_forwarded_stderr(child, None)?
+        };
+        if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!("scp exited with {status}")))
+            Err(io::Error::other(format!(
+                "scp exited with {}",
+                output.status
+            )))
         }
     }
 
@@ -781,12 +796,12 @@ impl RemoteSsh {
             match install_result {
                 Err(err) => Err(err),
                 Ok(installed) => {
-                    let output = cleanup?;
-                    if output.status.success() {
-                        Ok(installed)
-                    } else {
-                        Err(command_failed("remote install cleanup failed", &output))
+                    if let Ok(output) = cleanup {
+                        if !output.status.success() {
+                            tracing::warn!("remote install cleanup failed: {}", output.status);
+                        }
                     }
+                    Ok(installed)
                 }
             }
         })();
@@ -1222,7 +1237,19 @@ fn prepare_windows_remote_herdr(
     }
     // Windows needs the complete package, including its app-local ConPTY runtime.
     let source = match override_package {
-        Some(path) => InstallSource::persistent(path),
+        Some(path) => {
+            if !path.extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("zip") || ext.eq_ignore_ascii_case("exe")
+            }) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "{REMOTE_BINARY_ENV_VAR} on a Windows target must be a .zip or .exe Herdr package"
+                    ),
+                ));
+            }
+            InstallSource::persistent(path)
+        }
         None => download_release_asset(&remote_herdr.platform)?,
     };
     let install_result = (|| {

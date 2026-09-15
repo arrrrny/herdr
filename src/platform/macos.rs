@@ -26,23 +26,6 @@ pub(crate) use super::unix_common::{
 #[cfg(test)]
 mod config_file_tests;
 
-pub(crate) fn config_file_link_count(path: &Path) -> std::io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-pub(crate) fn write_existing_config(
-    _target: &std::path::Path,
-    _contents: &[u8],
-) -> std::io::Result<bool> {
-    // Unix keeps atomic replacement for existing files too.
-    Ok(false)
-}
-
 pub(crate) fn create_config_temporary(
     path: &Path,
     private: bool,
@@ -129,14 +112,13 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&Path>,
-    temporary: &Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name, which a local actor with write
+    // access to the config directory could have swapped for a symlink in between.
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     if let Some(source) = source {
         let input = std::fs::File::open(source)?;
         let metadata = input.metadata()?;

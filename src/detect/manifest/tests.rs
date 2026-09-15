@@ -1567,3 +1567,16 @@ fn ziki_query_surface_explains_from_agent_label() {
     assert_eq!(json["state"], "blocked");
     assert_eq!(json["agent"], "ziki");
 }
+
+#[test]
+fn pi_working_border_detects_working() {
+    // The upstream #4113 fix matches Pi's bordered working line. The rule is a
+    // literal regex, so without coverage a dash-count or spacing change would
+    // silently stop matching and the fix would regress unnoticed.
+    let explain = explain(Agent::Pi, "some output\n── ⠋ Working ────────\n");
+    assert_eq!(explain.state, AgentState::Working);
+    assert_eq!(
+        explain.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("working_border")
+    );
+}

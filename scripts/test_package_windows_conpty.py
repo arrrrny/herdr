@@ -62,7 +62,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
                 "sha256": hashlib.sha256(payload).hexdigest(),
             }
             server_error = urllib.error.HTTPError(
-                metadata["url"], 504, "Gateway Time-out", {}, None
+                metadata["url"], 504, "Gateway Time-out", {}, io.BytesIO()
             )
             with (
                 mock.patch.object(
