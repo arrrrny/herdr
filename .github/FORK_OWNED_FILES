@@ -56,6 +56,10 @@ src/session.rs                                ::  try_recover_partial_shutdown
 src/detect/manifests/ziki.toml                ::  arrrrny/ziki
 distribution/agent-detection/ziki.toml        ::  arrrrny/ziki
 src/api/http_push.rs                          ::  011-herdr-ziki-state-sync
+# The Agent::Ziki variant and its ALL / SCREEN_MANIFEST_AGENTS entries live here.
+# Both sides of the 2026-09-15 sync added a variant and each bumped only its own
+# array length, so the union auto-merged one entry short and did not compile.
+src/detect/mod.rs                             ::  Agent::Ziki
 
 # Pending-release labeling: built-in token, labels and comments, never closes;
 # closing stays with release.yml once the release exists.
