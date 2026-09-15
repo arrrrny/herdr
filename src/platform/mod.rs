@@ -55,6 +55,11 @@ pub(crate) fn classify_child_exit(_status: &portable_pty::ExitStatus) -> ChildEx
     ChildExitReason::Exited
 }
 
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn launch_executable() -> std::io::Result<std::path::PathBuf> {
+    std::env::current_exe()
+}
+
 pub(crate) fn detached_custom_command_process(command: &str) -> std::process::Command {
     let mut process = detached_custom_command_process_platform(command);
     configure_background_command(&mut process);
@@ -337,11 +342,19 @@ pub(crate) struct RemoteSshConfigPaths {
     pub(crate) multiplexing: bool,
 }
 
+pub(crate) const REMOTE_BRIDGE_IDLE_TIMEOUT_SUPPORTED: bool =
+    cfg!(any(target_os = "linux", target_os = "macos"));
+
+#[cfg(unix)]
+mod remote_bridge;
+#[cfg(all(test, unix))]
+mod remote_bridge_tests;
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, check_config_write_target, config_file_link_count, end_cli_output,
+    forward_remote_bridge_stdio, write_existing_config, RemoteBridgeWake,
 };
 
 mod client_state;

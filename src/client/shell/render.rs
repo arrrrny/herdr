@@ -128,17 +128,38 @@ pub(super) fn render_mode_bar(
                         crate::api::schema::PaneCopySearchDirection::Forward => "/",
                         crate::api::schema::PaneCopySearchDirection::Backward => "?",
                     };
-                    segments.extend([
-                        (" COPY ".to_owned(), mode_style),
-                        (" ".to_owned(), base),
-                        (marker.to_owned(), key),
-                        (
-                            prompt.query.clone(),
-                            Style::default().fg(palette.text).bg(palette.panel_bg),
-                        ),
-                        ("█".to_owned(), key),
-                        ("  enter search  esc cancel".to_owned(), base),
-                    ]);
+                    let label = " COPY ";
+                    let marker_col = label.len() as u16 + 1;
+                    let prefix = marker_col + 1;
+                    buffer.set_stringn(bar.x, bar.y, label, usize::from(bar.width), mode_style);
+                    if bar.width > marker_col {
+                        buffer.set_string(bar.x + marker_col, bar.y, marker, key);
+                    }
+                    let footer = "  enter search  esc cancel";
+                    let footer_width = if bar.width >= prefix + footer.len() as u16 {
+                        footer.len() as u16
+                    } else {
+                        0
+                    };
+                    let field = Rect::new(
+                        bar.x + prefix,
+                        bar.y,
+                        bar.width.saturating_sub(prefix + footer_width),
+                        1,
+                    );
+                    if let Some(cursor) = text_editor::render(
+                        buffer,
+                        field,
+                        &prompt.query,
+                        Style::default().fg(palette.text).bg(palette.panel_bg),
+                    ) {
+                        buffer[(cursor.x, cursor.y)]
+                            .set_style(Style::default().fg(palette.panel_bg).bg(palette.text));
+                    }
+                    if footer_width > 0 {
+                        buffer.set_string(bar.right() - footer_width, bar.y, footer, base);
+                    }
+                    return Some(bar);
                 } else {
                     let select = if copy_mode.selection.is_some() {
                         "selecting"
