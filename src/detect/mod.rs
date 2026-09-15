@@ -64,11 +64,12 @@ pub enum Agent {
     Qwen,
     Letta,
     Maki,
+    Ziki,
     Muse,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -92,10 +93,11 @@ impl Agent {
         Self::Qwen,
         Self::Letta,
         Self::Maki,
+        Self::Ziki,
         Self::Muse,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -117,6 +119,7 @@ impl Agent {
         Self::Qwen,
         Self::Letta,
         Self::Maki,
+        Self::Ziki,
         Self::Muse,
     ];
 }
@@ -146,6 +149,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Letta => "letta",
         Agent::Maki => "maki",
+        Agent::Ziki => "ziki",
         Agent::Muse => "muse",
     }
 }
@@ -181,6 +185,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Letta => "letta",
         Agent::Maki => "maki",
+        Agent::Ziki => "ziki",
         Agent::Muse => "muse",
     }
 }
@@ -221,6 +226,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
+        "ziki" => Some(Agent::Ziki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
@@ -333,6 +339,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
             | ("herdr:opencode", "opencode")
             | ("herdr:kilo", "kilo")
             | ("herdr:kimi", "kimi")
+            | ("herdr:ziki", "ziki")
     )
 }
 
@@ -1026,6 +1033,7 @@ mod tests {
             (Agent::Qwen, "qwen"),
             (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
+            (Agent::Ziki, "ziki"),
             (Agent::Muse, "muse"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
@@ -1049,6 +1057,43 @@ mod tests {
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
+    }
+
+    #[test]
+    fn identify_ziki_process() {
+        assert_eq!(identify_agent("ziki"), Some(Agent::Ziki));
+        assert_eq!(identify_agent("Ziki"), Some(Agent::Ziki));
+        assert_eq!(identify_agent("ZIKI"), Some(Agent::Ziki));
+        assert_eq!(identify_agent("/usr/local/bin/ziki"), Some(Agent::Ziki));
+        assert_eq!(parse_agent_label("ziki"), Some(Agent::Ziki));
+        assert_eq!(parse_agent_label("ziki-agent"), None);
+    }
+
+    #[test]
+    fn ziki_label_and_executable() {
+        assert_eq!(agent_label(Agent::Ziki), "ziki");
+        assert_eq!(interactive_agent_executable(Agent::Ziki), "ziki");
+    }
+
+    #[test]
+    fn ziki_is_full_lifecycle_hook_authority() {
+        assert!(full_lifecycle_hook_authority("herdr:ziki", "ziki"));
+        // Neighboring pairs must not accidentally gain authority.
+        assert!(!full_lifecycle_hook_authority("herdr:ziki", "kimi"));
+        assert!(!full_lifecycle_hook_authority("herdr:ziki2", "ziki"));
+        assert!(!full_lifecycle_hook_authority("ziki", "ziki"));
+    }
+
+    #[test]
+    fn ziki_in_agent_enumerations() {
+        assert!(Agent::ALL.contains(&Agent::Ziki));
+        assert_eq!(Agent::ALL.len(), 25);
+    }
+
+    #[test]
+    fn ziki_in_screen_manifest_agents() {
+        assert!(Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Ziki));
+        assert_eq!(Agent::SCREEN_MANIFEST_AGENTS.len(), 23);
     }
 
     #[test]
