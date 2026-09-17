@@ -1094,7 +1094,7 @@ impl AppState {
 
 pub(super) fn url_from_link_target(target: crate::ghostty::LinkTarget) -> Option<String> {
     match target {
-        crate::ghostty::LinkTarget::Uri(uri) => safe_web_url(&uri).map(str::to_owned),
+        crate::ghostty::LinkTarget::Uri(uri) => Some(uri),
         crate::ghostty::LinkTarget::Text { text, clicked_byte } => {
             url_at_byte(&text, clicked_byte).map(str::to_owned)
         }

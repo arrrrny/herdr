@@ -64,3 +64,16 @@ src/detect/mod.rs                             ::  Agent::Ziki
 # Pending-release labeling: built-in token, labels and comments, never closes;
 # closing stays with release.yml once the release exists.
 .github/workflows/label-next-release-issues.yml  ::  fork: upstream uses secrets.KANGAL_GITHUB_TOKEN
+
+# Fork-local config-write hardening (not upstreamed). The 2026-09-17 sync had to
+# re-keep each of these by hand: the fork stages config writes through the
+# exclusively created file descriptor (so a swapped symlink cannot be written
+# through), shares the unix config-write helpers, and routes Letta settings
+# through the protected writer so a symlinked settings file keeps its link.
+src/platform/unix_common.rs                   ::  config_file_link_count
+src/platform/linux.rs                         ::  keep that descriptor
+src/platform/macos.rs                         ::  keep that descriptor
+src/platform/windows.rs                       ::  keep that descriptor
+src/integration/config_file.rs                ::  exclusively-created descriptor
+src/integration/targets.rs                    ::  write_letta_staged_file
+src/integration/tests.rs                      ::  install_letta_keeps_a_symlinked_settings_file
