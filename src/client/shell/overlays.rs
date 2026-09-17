@@ -761,7 +761,7 @@ fn render_navigator_overlay(
             Rect::new(
                 i.x + 3,
                 i.y,
-                i.width.saturating_sub(4 + display_width(&count)),
+                i.width.saturating_sub(4 + display_width(&count)).max(1),
                 1,
             ),
             &n.query,

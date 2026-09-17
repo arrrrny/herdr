@@ -216,6 +216,17 @@ pub(super) fn snapshot(
                 preview: notes.preview,
             });
 
+    let file_badges =
+        crate::badges::load_file_badges(std::path::Path::new(crate::badges::DEFAULT_BADGE_FILE));
+    let badges = crate::badges::merge_badges(&file_badges, &app.state.badges)
+        .into_iter()
+        .map(|entry| protocol::ClientShellBadge {
+            key: entry.key,
+            text: entry.badge.text,
+            color: entry.badge.color,
+        })
+        .collect();
+
     protocol::ClientShellSnapshot {
         boot_id: boot_id.to_owned(),
         revision,
@@ -240,6 +251,7 @@ pub(super) fn snapshot(
         panes,
         agents,
         commands: app.client_shell_command_manifest(),
+        badges,
     }
 }
 
