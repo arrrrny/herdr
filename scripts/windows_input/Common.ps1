@@ -14,6 +14,14 @@ function Write-GauntletJson($Path, $Value) {
     }
 }
 
+function Read-GauntletLines($Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return @() }
+    for ($attempt = 0; ; $attempt++) {
+        try { return @([IO.File]::ReadAllLines($Path, [Text.UTF8Encoding]::new($false))) }
+        catch [IO.IOException] { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 25 }
+    }
+}
+
 function Read-GauntletJson($Path) {
     if (Test-Path -LiteralPath $Path) {
         $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
@@ -58,7 +66,9 @@ function Invoke-GauntletProcess($Exe, $Arguments, $Plan = $null, [int] $Timeout 
             $process.Kill($true)
             throw "Command timed out: $Exe $($Arguments -join ' ')"
         }
-        $remaining = [Math]::Max(0, $Timeout * 1000 - [int]$timer.ElapsedMilliseconds)
+        # Draining after exit needs its own budget: a command may consume all of $Timeout
+        # and still exit cleanly, leaving zero milliseconds for the pipe readers.
+        $remaining = [Math]::Max(1000, $Timeout * 1000 - [int]$timer.ElapsedMilliseconds)
         if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), $remaining)) {
             throw "Output streams stayed open after exit: $Exe $($Arguments -join ' ')"
         }

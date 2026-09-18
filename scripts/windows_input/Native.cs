@@ -163,8 +163,16 @@ namespace HerdrInputGauntlet {
                 return GetClipboardSequenceNumber();
             } finally { CloseClipboard(); }
         }
+        // Retries the open like the JSON writers do: clipboard ownership is transient.
+        static bool OpenClipboardForCleanup(uint attempts = 20) {
+            for(uint i=0;i<attempts;i++) {
+                if(OpenClipboard(IntPtr.Zero)) return true;
+                Thread.Sleep(25);
+            }
+            return false;
+        }
         public static bool ClearOwnedClipboard(uint sequence) {
-            if(!OpenClipboard(IntPtr.Zero)) return false;
+            if(!OpenClipboardForCleanup()) return false;
             try { return GetClipboardSequenceNumber()!=sequence || EmptyClipboard(); }
             finally { CloseClipboard(); }
         }
@@ -411,6 +419,17 @@ namespace HerdrInputGauntlet {
         public bool ClearIfCount(int expected) {
             lock(gate) {
                 if(bytes.Count+records.Count!=expected) return false;
+                bytes.Clear(); records.Clear(); return true;
+            }
+        }
+        // Nothing typed arrived; only resize/focus notifications did in the end->begin gap.
+        // The oracle ignores these (report.py: type 4/16), so the gate must too.
+        public bool ClearIfNonKey(int expected) {
+            lock(gate) {
+                if(bytes.Count!=0 || records.Count<=expected) return false;
+                // Only the gap records beyond the previous 'end' count are new; the earlier
+                // slice belongs to the finished capture and may legitimately hold key events.
+                for(int i=expected;i<records.Count;i++) if(records[i][0]!=4 && records[i][0]!=16) return false;
                 bytes.Clear(); records.Clear(); return true;
             }
         }
