@@ -1183,26 +1183,67 @@ pub(super) fn prepare_remote_herdr(
     })
 }
 
+/// Resolves the remote Herdr binary to run for a saved machine.
+///
+/// A candidate that answers with a client status but fails the endpoint requirement is
+/// positively too old, and a discovery that found no candidate at all is positively missing.
+/// A candidate whose status probe could not be completed is only *inconclusive*, which leaves
+/// [`remote_herdr_unavailable`] to keep the verdict retryable.
 pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteHerdr> {
     let platform = detect_remote_platform(ssh)?;
     let remote_herdr = RemoteHerdr::for_platform(platform);
     let candidates = remote_binary_candidates(ssh, &remote_herdr)?;
+    let missing = candidates.is_empty();
+    let mut outdated = false;
+    let mut unconfirmed = false;
     for mut candidate in candidates {
-        if let Some(status) = remote_client_status(ssh, &candidate)? {
-            if status.supports_endpoint_requirement(&candidate.platform, true) {
-                candidate.bridge_idle_timeout = status.remote_bridge_idle_timeout;
-                return Ok(candidate);
+        match remote_client_status(ssh, &candidate)? {
+            RemoteClientProbe::Status(status) => {
+                if status.supports_endpoint_requirement(&candidate.platform, true) {
+                    candidate.bridge_idle_timeout = status.remote_bridge_idle_timeout;
+                    return Ok(candidate);
+                }
+                outdated = true;
             }
+            RemoteClientProbe::Unconfirmed => unconfirmed = true,
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        format!(
-            "matching Herdr is not ready on {}; run `herdr --remote {}` interactively to install or update it",
-            ssh.target(),
-            ssh.target()
-        ),
+    Err(remote_herdr_unavailable(
+        ssh.target(),
+        missing,
+        outdated,
+        unconfirmed,
     ))
+}
+
+/// The verdict for a discovery pass that found no usable remote Herdr binary.
+///
+/// A pass where every candidate answered, or where discovery found no candidate binary at all,
+/// positively shows that this remote cannot serve saved machines: retrying cannot change it, so
+/// it stays a needs-attention verdict and the user is told to install or update.
+///
+/// A pass where *any* candidate could not be probed is inconclusive, so the verdict stays
+/// retryable and the machine keeps reconnecting on its own backoff instead of staying dead until
+/// the client is restarted. One unresponsive candidate is enough: another candidate answering
+/// "too old" does not rule out that the unresponsive one would have been usable.
+fn remote_herdr_unavailable(
+    target: &str,
+    missing: bool,
+    outdated: bool,
+    unconfirmed: bool,
+) -> io::Error {
+    if !unconfirmed && (missing || outdated) {
+        return io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "matching Herdr is not ready on {target}; run `herdr --remote {target}` interactively to install or update it"
+            ),
+        );
+    }
+    io::Error::new(
+        io::ErrorKind::ConnectionAborted,
+        format!("could not confirm a usable Herdr on {target}; reconnecting"),
+    )
 }
 
 fn prepare_windows_remote_herdr(
@@ -1565,21 +1606,33 @@ fn is_mise_shim_path(path: &str) -> bool {
     path.ends_with("/mise/shims/herdr")
 }
 
+/// What a candidate remote Herdr binary reported about itself.
+#[derive(Debug)]
+enum RemoteClientProbe {
+    /// The binary answered with a client status.
+    Status(RemoteClientStatusJson),
+    /// The probe could not be completed: the binary could not be run to completion, or its output
+    /// was not a client status. This is inconclusive rather than a verdict, so callers that decide
+    /// whether to keep trying must not read it as proof that the remote needs an install.
+    Unconfirmed,
+}
+
 fn remote_client_status(
     ssh: &RemoteSsh,
     remote_herdr: &RemoteHerdr,
-) -> io::Result<Option<RemoteClientStatusJson>> {
+) -> io::Result<RemoteClientProbe> {
     let command = remote_herdr.executable.status_client_command();
     let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
         if output.status.code() == Some(255) {
             return Err(command_failed("remote SSH connection failed", &output));
         }
-        return Ok(None);
+        return Ok(RemoteClientProbe::Unconfirmed);
     }
-    Ok(parse_client_status_json(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
+    Ok(
+        parse_client_status_json(&String::from_utf8_lossy(&output.stdout))
+            .map_or(RemoteClientProbe::Unconfirmed, RemoteClientProbe::Status),
+    )
 }
 
 fn remote_binary_supports_endpoint_requirement(
@@ -1587,11 +1640,10 @@ fn remote_binary_supports_endpoint_requirement(
     remote_herdr: &RemoteHerdr,
     require_surface_interest: bool,
 ) -> io::Result<bool> {
-    Ok(
-        remote_client_status(ssh, remote_herdr)?.is_some_and(|status| {
-            status.supports_endpoint_requirement(&remote_herdr.platform, require_surface_interest)
-        }),
-    )
+    let RemoteClientProbe::Status(status) = remote_client_status(ssh, remote_herdr)? else {
+        return Ok(false);
+    };
+    Ok(status.supports_endpoint_requirement(&remote_herdr.platform, require_surface_interest))
 }
 
 fn remote_binary_exists(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<bool> {
@@ -2137,9 +2189,11 @@ fn confirm_remote_server_stop(
 }
 
 fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
-    let status = remote_client_status(ssh, remote_herdr)?.ok_or_else(|| {
-        io::Error::other("could not inspect the prepared remote herdr binary before live handoff")
-    })?;
+    let RemoteClientProbe::Status(status) = remote_client_status(ssh, remote_herdr)? else {
+        return Err(io::Error::other(
+            "could not inspect the prepared remote herdr binary before live handoff",
+        ));
+    };
     let protocol = status.protocol.ok_or_else(|| {
         io::Error::other("prepared remote herdr did not report its private protocol")
     })?;
@@ -4727,6 +4781,36 @@ mod tests {
         assert!(
             parse_client_status_json(r#"{"endpoint_protocol_generation":"unknown"}"#).is_none()
         );
+    }
+
+    /// Pins the contract between the discovery verdict and the code that decides whether a saved
+    /// machine keeps reconnecting, so a reworded or re-kinded verdict cannot silently stop the
+    /// retry loop again.
+    #[test]
+    fn only_positive_discovery_verdicts_need_attention_from_the_user() {
+        for verdict in [
+            // Discovery ran and this machine has no Herdr installed.
+            remote_herdr_unavailable("build", true, false, false),
+            // Every candidate answered, and every one of them is too old.
+            remote_herdr_unavailable("build", false, true, false),
+        ] {
+            assert!(
+                crate::remote::saved_ssh_failure_needs_attention(&verdict),
+                "a confirmed unusable remote must ask the user to act: {verdict}"
+            );
+        }
+        for verdict in [
+            // No candidate could be probed.
+            remote_herdr_unavailable("build", false, false, true),
+            // A stale second install answered "too old" while the other candidate stayed silent;
+            // the silent one may still be the usable binary, so this cannot be a verdict.
+            remote_herdr_unavailable("build", false, true, true),
+        ] {
+            assert!(
+                !crate::remote::saved_ssh_failure_needs_attention(&verdict),
+                "an unconfirmed remote must keep reconnecting: {verdict}"
+            );
+        }
     }
 
     #[test]
