@@ -31,12 +31,12 @@ fn config_replacement_preserves_macos_acl() {
         .status()
         .unwrap()
         .success());
-    drop(create_config_temporary(&temporary, true).unwrap());
+    let staged = create_config_temporary(&temporary, true).unwrap();
     assert!(
         acl(&temporary).is_empty(),
         "staging must not inherit allow ACEs"
     );
-    write_config_temporary(Some(&source), &temporary, b"new").unwrap();
+    write_config_temporary(Some(&source), staged, b"new").unwrap();
     assert_eq!(acl(&temporary), original);
     assert_eq!(std::fs::read(&source).unwrap(), b"original");
     assert_eq!(std::fs::read(&temporary).unwrap(), b"new");

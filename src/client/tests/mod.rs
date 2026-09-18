@@ -752,7 +752,7 @@ fn toast_notify_from_server_is_emitted_even_when_attach_config_was_off() {
             emitted = Some((title.to_string(), body.map(str::to_string)));
             Ok(true)
         },
-        |_, _| Ok(false),
+        |_, _, _| Ok(false),
     );
 
     assert_eq!(
@@ -772,7 +772,7 @@ fn system_toast_notify_from_server_uses_system_notifier() {
         Some("workspace 1"),
         &sound_config,
         |_, _| Ok(false),
-        |title, body| {
+        |title, body, _target| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
             Ok(true)
         },
@@ -795,7 +795,7 @@ fn system_toast_notify_preserves_colon_in_title() {
         Some("api workspace"),
         &sound_config,
         |_, _| Ok(false),
-        |title, body| {
+        |title, body, _target| {
             emitted = Some((title.to_string(), body.map(str::to_string)));
             Ok(true)
         },

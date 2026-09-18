@@ -107,23 +107,6 @@ pub(crate) fn launch_executable() -> std::io::Result<PathBuf> {
     Ok(executable)
 }
 
-pub(crate) fn config_file_link_count(path: &std::path::Path) -> std::io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-pub(crate) fn write_existing_config(
-    _target: &std::path::Path,
-    _contents: &[u8],
-) -> std::io::Result<bool> {
-    // Unix keeps atomic replacement for existing files too.
-    Ok(false)
-}
-
 pub(crate) fn create_config_temporary(
     path: &std::path::Path,
     private: bool,
@@ -138,14 +121,13 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&std::path::Path>,
-    temporary: &std::path::Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name, which a local actor with write
+    // access to the config directory could have swapped for a symlink in between.
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     if let Some(source) = source {
         let input = std::fs::File::open(source)?;
         let metadata = input.metadata()?;
@@ -170,21 +152,31 @@ pub(crate) fn write_config_temporary(
 fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> {
     use std::ffi::CStr;
     fn names(fd: RawFd) -> std::io::Result<Vec<u8>> {
-        let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
-        if size < 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ENOTSUP) {
-                return Ok(Vec::new());
+        // The list can grow between the size probe and the read.
+        for _ in 0..2 {
+            let size = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+            if size < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ENOTSUP) {
+                    return Ok(Vec::new());
+                }
+                return Err(error);
             }
-            return Err(error);
+            let mut buffer = vec![0; size as usize];
+            let read = unsafe { libc::flistxattr(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if read < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ERANGE) {
+                    continue;
+                }
+                return Err(error);
+            }
+            buffer.truncate(read as usize);
+            return Ok(buffer);
         }
-        let mut buffer = vec![0; size as usize];
-        let read = unsafe { libc::flistxattr(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
-        if read < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        buffer.truncate(read as usize);
-        Ok(buffer)
+        Err(std::io::Error::other(
+            "extended attribute list kept changing while copying config metadata",
+        ))
     }
     fn value(fd: RawFd, name: &CStr) -> std::io::Result<Vec<u8>> {
         let size = unsafe { libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
@@ -200,6 +192,20 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
         buffer.truncate(read as usize);
         Ok(buffer)
     }
+    // Security labels and capabilities live in privileged namespaces that an
+    // unprivileged process cannot write; the inherited value is left in place.
+    fn is_privileged_name(name: &CStr) -> bool {
+        let name = name.to_bytes();
+        !(name.starts_with(b"user.") || name == b"system.posix_acl_access")
+    }
+    fn is_tolerable(error: &std::io::Error, name: &CStr) -> bool {
+        match error.raw_os_error() {
+            // The attribute is already absent, which is the desired end state.
+            Some(libc::ENODATA) => true,
+            Some(libc::EPERM) | Some(libc::EACCES) => is_privileged_name(name),
+            _ => false,
+        }
+    }
     let source_names = names(source)?;
     for bytes in names(destination)?.split_inclusive(|byte| *byte == 0) {
         if !source_names
@@ -208,7 +214,10 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
         {
             let name = CStr::from_bytes_with_nul(bytes).map_err(std::io::Error::other)?;
             if unsafe { libc::fremovexattr(destination, name.as_ptr()) } != 0 {
-                return Err(std::io::Error::last_os_error());
+                let error = std::io::Error::last_os_error();
+                if !is_tolerable(&error, name) {
+                    return Err(error);
+                }
             }
         }
     }
@@ -229,7 +238,10 @@ fn copy_config_xattrs(source: RawFd, destination: RawFd) -> std::io::Result<()> 
             )
         } != 0
         {
-            return Err(std::io::Error::last_os_error());
+            let error = std::io::Error::last_os_error();
+            if !is_tolerable(&error, name) {
+                return Err(error);
+            }
         }
     }
     Ok(())
@@ -294,7 +306,11 @@ fn process_detection_mode() -> ProcessDetectionMode {
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
+    vec![
+        super::user_login_shell().into_os_string(),
+        flag.into(),
+        command.into(),
+    ]
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -307,7 +323,7 @@ pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::pr
 pub(crate) fn pane_custom_command_pty_builder_platform(
     command: &str,
 ) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
+    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-lc"))
 }
 
 pub(crate) fn scrollback_editor_argv(path: &std::path::Path) -> std::io::Result<Vec<String>> {
@@ -774,6 +790,140 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// On Linux this reads `/proc/net/unix` to find the socket's inode, then scans
+/// `/proc/*/fd/*` for a matching `socket:[inode]` symlink. Returns `None` if
+/// the path is not a Unix socket, no process owns it, or the path contains
+/// non-UTF8 bytes.
+pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> {
+    let target_path = socket_path.to_str()?;
+    let inode = read_unix_socket_inode(target_path)?;
+    find_pid_holding_socket_inode(inode)
+}
+
+/// Reads `/proc/net/unix` and returns the inode of the Unix domain socket
+/// bound at `socket_path`. The file format is whitespace-separated with the
+/// path as the final column; unnamed sockets have an empty path column.
+///
+/// Lines with fewer than 7 fields (no path) are skipped with `continue` —
+/// using `?` here would abort the entire scan on the first unnamed socket,
+/// which is the common case (most Unix sockets in `/proc/net/unix` are unnamed
+/// client-side connection sockets).
+fn read_unix_socket_inode(socket_path: &str) -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/net/unix").ok()?;
+    // Header: Num RefCount Protocol Flags Type St Inode Path
+    for line in content.lines().skip(1) {
+        let mut parts = line.split_whitespace();
+        // Skip Num, RefCount, Protocol, Flags, Type, St (6 fields). Malformed
+        // lines (fewer than 6 fields) are skipped, not fatal.
+        let mut skipped = 0;
+        while skipped < 6 {
+            if parts.next().is_none() {
+                break;
+            }
+            skipped += 1;
+        }
+        if skipped < 6 {
+            continue;
+        }
+        let Some(inode_str) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue; // unnamed socket — no path column
+        };
+        if path == socket_path {
+            return inode_str.parse().ok();
+        }
+    }
+    None
+}
+
+/// Scans `/proc/*/fd/*` for a symlink target of the form `socket:[inode]` and
+/// returns the PID of the first matching process. Used together with
+/// `read_unix_socket_inode` to locate the owner of a Unix domain socket.
+fn find_pid_holding_socket_inode(inode: u64) -> Option<u32> {
+    let target = format!("socket:[{inode}]");
+    let entries = std::fs::read_dir("/proc").ok()?;
+    for entry in entries.flatten() {
+        let pid: u32 = match entry.file_name().to_str().and_then(|s| s.parse().ok()) {
+            Some(pid) => pid,
+            None => continue,
+        };
+        let fd_dir = entry.path().join("fd");
+        let fd_entries = match std::fs::read_dir(&fd_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue, // not a process dir, or no permission
+        };
+        for fd_entry in fd_entries.flatten() {
+            if let Ok(link) = std::fs::read_link(fd_entry.path()) {
+                if link.to_str() == Some(&target) {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod find_unix_socket_owner_pid_tests {
+    use super::*;
+
+    #[test]
+    fn returns_none_for_missing_path() {
+        let path = std::path::PathBuf::from("/tmp/herdr-does-not-exist-test.sock");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(find_unix_socket_owner_pid(&path), None);
+    }
+
+    #[test]
+    fn finds_owner_pid_of_listening_socket() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/herdr-pid-lookup-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        let pid = find_unix_socket_owner_pid(&path);
+        // The listener is bound by this test process.
+        assert_eq!(pid, Some(std::process::id()));
+
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_none_after_socket_file_removed() {
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/herdr-pid-lookup-gone-{}-{}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        }
+        // Listener dropped → socket file may or may not be cleaned up by the OS.
+        // Either way, no process should hold it open now.
+        let _ = std::fs::remove_file(&path);
+        // After removing the file, /proc/net/unix should no longer list this path.
+        assert_eq!(find_unix_socket_owner_pid(&path), None);
+    }
+}
+
 pub fn write_clipboard(bytes: &[u8]) -> bool {
     for command in clipboard_commands() {
         if run_clipboard_command(&command, bytes) {
@@ -888,7 +1038,16 @@ fn bytes_match_image_signature(extension: &str, bytes: &[u8]) -> bool {
 }
 
 /// Show a native desktop notification through libnotify's command-line helper.
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+///
+/// `click_target` is currently ignored on Linux — `notify-send` does not
+/// support a click-back channel that fits the FreeDesktop notification spec
+/// without registering an action server. The macOS implementation in
+/// `src/platform/macos.rs` wires the click via terminal-notifier's `-execute`.
+pub fn show_desktop_notification(
+    title: &str,
+    body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     show_desktop_notification_with_command(title, body, |program| Command::new(program))
 }
 

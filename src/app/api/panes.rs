@@ -534,6 +534,12 @@ impl App {
             })
             .unwrap_or_default();
 
+        // A background job (`cmd &`) also lands in the foreground process group
+        // here, so it counts as busy too — acceptable for the idle signal.
+        let busy = foreground_process_group_id
+            .zip(shell_pid)
+            .is_some_and(|(fg, sp)| fg != sp);
+
         encode_success(
             id,
             ResponseResult::PaneProcessInfo {
@@ -543,6 +549,7 @@ impl App {
                     foreground_process_group_id,
                     tty: None,
                     foreground_processes,
+                    busy,
                 },
             },
         )

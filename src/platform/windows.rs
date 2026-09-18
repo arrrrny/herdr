@@ -218,9 +218,11 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&std::path::Path>,
-    temporary: &std::path::Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name.
     use std::io::Write;
     if source.is_some() {
         // If preparation finds an existing file, leave it to the recovery-backed
@@ -230,10 +232,6 @@ pub(crate) fn write_config_temporary(
             "config appeared while preparing a new file; retry the update",
         ));
     }
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     output.write_all(contents)?;
     output.sync_all()
 }
@@ -1525,7 +1523,7 @@ fn select_pane_foreground_job(
 }
 
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
-    crate::detect::identify_agent(&entry.name).is_some()
+    crate::detect::identify_agent_for_process(&foreground_process_from_entry(entry)).is_some()
         || crate::detect::identify_agent_in_job(&foreground_job_from_entry(entry)).is_some()
 }
 
@@ -2256,6 +2254,20 @@ pub fn process_exists(pid: u32) -> bool {
     ok && exit_code == STILL_ACTIVE
 }
 
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// Windows uses named pipes rather than Unix domain sockets for the herdr
+/// server, and named-pipe ownership lookup requires server-side APIs not
+/// available from a client process. Returns `None`; the fallback SIGTERM path
+/// in `stop_socket_with_timeout` is a no-op on Windows and the user gets the
+/// existing "server is not running" error message.
+pub fn find_unix_socket_owner_pid(_socket_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
 pub fn write_clipboard(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -2399,7 +2411,11 @@ fn clipboard_global_bytes(format: u32, max_bytes: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
+pub fn show_desktop_notification(
+    title: &str,
+    body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     let title = title.to_owned();
     let body = body.unwrap_or(&title).to_owned();
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
