@@ -81,9 +81,9 @@ src/integration/tests.rs                      ::  install_letta_keeps_a_symlinke
 # 2026-09-23 upstream-sync hand unions: preserve the fork's Windows input
 # cleanup, retry, ownership, and report-survival behavior alongside upstream's
 # newer probe and matrix changes.
-scripts/test_windows_input.ps1               ::  herdr-remote
+scripts/test_windows_input.ps1               ::  herdr-remote')) { (Read-GauntletLines
 scripts/test_windows_input.ps1               ::  client_trace_created_at
-scripts/windows_input/Common.ps1              ::  HERDR_REMOTE_KEYBINDINGS
+scripts/windows_input/Common.ps1              ::  function Read-GauntletLines($Path) {
 scripts/windows_input/Native.cs              ::  ClearIfNonKey
 scripts/windows_input/Probe.ps1               ::  ClearIfNonKey
 scripts/windows_input/report.py               ::  errors_out_of_matrix

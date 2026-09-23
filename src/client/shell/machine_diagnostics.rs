@@ -88,9 +88,6 @@ impl ClientShellState {
         let Some(id) = hit else {
             return false;
         };
-        if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
-            return true;
-        }
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return false;
         }

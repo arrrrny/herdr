@@ -178,7 +178,12 @@ impl App {
             return pane_not_found(id, &target.pane_id);
         };
         match runtime.clear_screen() {
-            Ok(()) => encode_success(id, ResponseResult::Ok {}),
+            Ok(true) => encode_success(id, ResponseResult::Ok {}),
+            Ok(false) => encode_error(
+                id,
+                "pane_clear_unsupported",
+                "the terminal only clears on the primary screen; nothing was cleared",
+            ),
             Err(err) => encode_error(id, "pane_clear_failed", err.to_string()),
         }
     }

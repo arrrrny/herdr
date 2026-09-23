@@ -120,7 +120,12 @@ impl App {
                     )
                 })?
         };
-        let ws = &self.state.workspaces[ws_idx];
+        let Some(ws) = self.state.workspaces.get(ws_idx) else {
+            return Err(ApiFailure::new(
+                "workspace_not_found",
+                "workspace not found",
+            ));
+        };
         Ok(SourceInput {
             workspace_id: Some(ws.id.clone()),
             membership: ws.worktree_space().cloned(),

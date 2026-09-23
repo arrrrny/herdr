@@ -3165,18 +3165,21 @@ impl PaneRuntime {
         self.compression.wake();
     }
 
-    pub fn clear_screen(&self) -> Result<(), String> {
+    pub fn clear_screen(&self) -> Result<bool, String> {
         let guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        self.content_seq.fetch_add(1, Ordering::AcqRel);
-        let result = self.terminal.clear_screen();
-        self.content_seq.fetch_add(1, Ordering::Release);
+        let cleared = self.terminal.clear_screen()?;
+        if cleared {
+            // Bracket the cleared frame so readers observe a new content revision.
+            self.content_seq.fetch_add(1, Ordering::AcqRel);
+            self.content_seq.fetch_add(1, Ordering::Release);
+            self.compression.wake();
+            mark_detection_content_changed(&self.detection_content_seq);
+        }
         drop(guard);
-        self.compression.wake();
-        mark_detection_content_changed(&self.detection_content_seq);
-        result
+        Ok(cleared)
     }
 
     /// Reset scroll to live view (offset = 0).

@@ -164,6 +164,7 @@ namespace HerdrInputGauntlet {
             if(!OpenClipboard(owner)) throw new Exception("Clipboard busy; refusing replacement");
             IntPtr pngMemory=IntPtr.Zero,textMemory=IntPtr.Zero;
             bool complete=false;
+            bool wrote=false;
             try {
                 if(CountClipboardFormats()!=0) throw new Exception("Clipboard changed or contains user data; refusing replacement");
                 byte[] png=Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/jPwPAfAAUAAf+mXJtdAAAAAElFTkSuQmCC");
@@ -173,6 +174,7 @@ namespace HerdrInputGauntlet {
                 if(pointer==IntPtr.Zero) throw new Exception("Clipboard allocation failed");
                 try { Marshal.Copy(png,0,pointer,png.Length); } finally { GlobalUnlock(pngMemory); }
                 if(!EmptyClipboard()) throw new Exception("Clipboard clear failed");
+                wrote=true;
                 uint pngFormat=RegisterClipboardFormat("PNG");
                 if(pngFormat==0 || SetClipboardData(pngFormat,pngMemory)==IntPtr.Zero) throw new Exception("Clipboard image write failed");
                 pngMemory=IntPtr.Zero;
@@ -188,7 +190,7 @@ namespace HerdrInputGauntlet {
                 }
                 complete=true;
             } finally {
-                if(!complete) EmptyClipboard();
+                if(wrote && !complete) EmptyClipboard();
                 if(pngMemory!=IntPtr.Zero) GlobalFree(pngMemory);
                 if(textMemory!=IntPtr.Zero) GlobalFree(textMemory);
                 CloseClipboard();

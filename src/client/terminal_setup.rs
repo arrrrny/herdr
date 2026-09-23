@@ -1,13 +1,13 @@
 //! Terminal setup and restoration for the rendered client.
 
 use std::io::{self, Write as _};
-#[cfg(not(windows))]
+#[cfg(unix)]
 use std::os::fd::AsRawFd as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
-#[cfg(not(windows))]
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -144,19 +144,19 @@ pub(super) struct TerminalGuard {
     restore_windows_input_mode: Arc<WindowsInputModeRestore>,
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 const HOST_KEYBOARD_QUERY_TIMEOUT: Duration = Duration::from_millis(250);
-#[cfg(not(windows))]
+#[cfg(unix)]
 const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 #[derive(Default)]
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
     primary_device_attributes: bool,
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
     const QUERY: &[u8] = b"\x1b[?u\x1b[c";
 
@@ -212,7 +212,7 @@ fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
     )
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn host_escape_disambiguation_confirmed(responses: &HostKeyboardProbeResponses) -> bool {
     responses.primary_device_attributes
         && responses
@@ -220,7 +220,7 @@ fn host_escape_disambiguation_confirmed(responses: &HostKeyboardProbeResponses) 
             .is_some_and(|flags| flags & 0b0000_0001 != 0)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn consume_host_keyboard_probe_responses(
     buffered_input: &mut Vec<u8>,
     responses: &mut HostKeyboardProbeResponses,
@@ -294,7 +294,7 @@ fn consume_host_keyboard_probe_responses(
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     if bytes.first() != Some(&0x1b) {
         return None;
@@ -322,7 +322,7 @@ fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     Some(None)
 }
 
-#[cfg(windows)]
+#[cfg(not(unix))]
 fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
     (false, Vec::new())
 }
@@ -849,7 +849,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_consumes_fragmented_responses_and_preserves_input() {
         let stream = b"before\x1b[?7u-middle-\x1b[?1;2cafter";
@@ -868,7 +868,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_preserves_typed_input_before_responses() {
         let mut buffered = b"aPtyped\x1b[?7u\x1b[?1;2c".to_vec();
@@ -880,7 +880,7 @@ mod tests {
         assert_eq!(buffered, b"aPtyped");
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_requires_disambiguation_bit_and_device_attributes() {
         for (flags, expected) in [(0, false), (2, false), (7, true)] {
@@ -894,7 +894,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_requires_flags_before_device_attributes() {
         let mut buffered = b"\x1b[?1;2c\x1b[?7uinput".to_vec();
@@ -907,7 +907,7 @@ mod tests {
         assert_eq!(buffered, b"input");
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_preserves_response_shaped_payloads() {
         let opaque = b"\x1b[200~paste \x1b[?1u \x1b[?1;2c\x1b[201~-\x1bPdata \x1b[?7u\x1b\\";
@@ -920,7 +920,7 @@ mod tests {
         assert_eq!(buffered, opaque);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn host_keyboard_probe_preserves_malformed_responses() {
         let mut buffered = b"a\x1b[?7;1ub\x1b[?65536uc".to_vec();

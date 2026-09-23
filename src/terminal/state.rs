@@ -36,6 +36,12 @@ pub struct HookAuthority {
     pub message: Option<String>,
     #[serde(skip, default = "Instant::now")]
     pub reported_at: Instant,
+    /// Age of `reported_at` at the moment this authority crossed a serialized
+    /// boundary. `Instant` cannot be serialized, so the receiving side rebuilds
+    /// `reported_at` from this age instead of re-stamping it as "now", which
+    /// would hand an already-stale report another full staleness window.
+    #[serde(default)]
+    pub reported_age_ms: u64,
     pub session_ref: Option<crate::agent_resume::AgentSessionRef>,
 }
 
@@ -242,15 +248,29 @@ impl TerminalState {
             return None;
         }
         let authority = self.hook_authority.as_ref()?;
+        let mut authority = authority.clone();
+        let sequence = self.hook_report_sequences.get(&authority.source).copied();
+        // Carry the report's age: the receiving process cannot read our clock,
+        // and a fresh `reported_at` there would waive the staleness rule.
+        authority.reported_age_ms = Instant::now()
+            .saturating_duration_since(authority.reported_at)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
         Some(HandoffAgentState {
-            authority: authority.clone(),
-            sequence: self.hook_report_sequences.get(&authority.source).copied(),
+            authority,
+            sequence,
             acquisition_pending: self.agent_process_acquisition_pending,
         })
     }
 
     #[cfg(unix)]
     pub(crate) fn restore_handoff_agent_state(&mut self, snapshot: HandoffAgentState) {
+        let mut snapshot = snapshot;
+        // Rebuild the report time from the carried age so an authority that was
+        // already stale before the handoff does not look fresh here.
+        snapshot.authority.reported_at = Instant::now()
+            .checked_sub(Duration::from_millis(snapshot.authority.reported_age_ms))
+            .unwrap_or(snapshot.authority.reported_at);
         if let Some(sequence) = snapshot.sequence {
             self.hook_report_sequences
                 .insert(snapshot.authority.source.clone(), sequence);
@@ -797,6 +817,7 @@ impl TerminalState {
             state,
             message,
             reported_at: now,
+            reported_age_ms: 0,
             session_ref,
         });
         let current_session = self.current_session_identity_for_persistence();
@@ -1071,6 +1092,7 @@ impl TerminalState {
                     state,
                     message: message.map(str::to_string),
                     reported_at,
+                    reported_age_ms: 0,
                     session_ref: Some(session_ref),
                 },
                 seq,

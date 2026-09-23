@@ -697,7 +697,10 @@ fn render_navigator_overlay(
     let a = b.area;
     let width = a.width.saturating_sub(4).min(116);
     let height = a.height.saturating_sub(2).min(42);
-    if width < 4 || height < 9 {
+    // Four rows is the floor this layout can draw in: the title/search row, the
+    // separator and the first body row. Declining below it would leave the
+    // navigator active behind an invisible frame, still swallowing input.
+    if width < 4 || height < 4 {
         return None;
     }
     let q = Rect::new(

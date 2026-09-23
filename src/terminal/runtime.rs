@@ -270,7 +270,7 @@ impl TerminalRuntime {
         self.0.scroll_reset();
     }
 
-    pub fn clear_screen(&self) -> Result<(), String> {
+    pub fn clear_screen(&self) -> Result<bool, String> {
         self.0.clear_screen()
     }
 

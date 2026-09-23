@@ -295,7 +295,7 @@ fn handle_connection_with_stop(
             write_json_line(
                 &mut stream,
                 &SuccessResponse {
-                    id: request_id,
+                    id: request_id.clone(),
                     result: ResponseResult::Ok {},
                 },
             )?;
@@ -308,9 +308,13 @@ fn handle_connection_with_stop(
                         lease.refresh()?;
                         std::thread::sleep(CONNECTION_POLL_INTERVAL);
                     }
-                    _ => break,
+                    // The registration lasts until the connection closes, so a
+                    // byte arriving on it does not end the lease.
+                    LocalStreamRead::Data => {}
+                    LocalStreamRead::Closed => break,
                 }
             }
+            crate::logging::api_request_completed(&request_id, method, "stream_closed", changes_ui);
             Ok(())
         }
         Method::PaneGraphicsStream(params) => {
@@ -891,9 +895,6 @@ fn stream_subscriptions(
                 }
             };
             for event in events {
-                if should_stop_connection(&mut stream, running)? {
-                    return Ok(());
-                }
                 if let Err(err) = write_json_line(&mut stream, &event) {
                     if is_connection_closed_error(&err) {
                         return Ok(());

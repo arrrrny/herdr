@@ -125,33 +125,16 @@ fn unix_stdin_reader_loop(
                 &reader,
                 idle_flush_timeout_ms(&framer, host_mouse_capture_active.load(Ordering::Acquire)),
             ) == Some(false)
-        {
-            let had_pending = framer.has_pending_input();
-            let chunks = framer.flush_timeout();
-            let held_escape = had_pending && chunks.is_empty();
-            if !send_unix_input_chunks(
-                chunks,
+            && !flush_unix_input_after_idle(
+                &reader,
+                &mut framer,
                 &event_tx,
                 &mut pending_palette,
                 sgr_pixels,
                 last_geometry,
-            ) || !flush_unix_palette_input(&event_tx, &mut pending_palette)
-            {
-                return;
-            }
-            if held_escape
-                && stdin_read_ready(&reader, crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS)
-                    == Some(false)
-                && !send_unix_input_chunks(
-                    framer.flush_timeout(),
-                    &event_tx,
-                    &mut pending_palette,
-                    sgr_pixels,
-                    last_geometry,
-                )
-            {
-                return;
-            }
+            )
+        {
+            return;
         }
         pending_mode = framer.has_pending_input().then_some(sgr_pixels);
     }
@@ -226,43 +209,20 @@ fn unix_stdin_reader_loop(
                     host_mouse_capture_active.load(Ordering::Acquire),
                 );
                 if stdin_read_ready(&reader, timeout_ms) == Some(false) {
-                    let had_pending = framer.has_pending_input();
-                    let chunks = framer.flush_timeout();
-                    let held_escape = had_pending && chunks.is_empty();
                     let sgr_pixels = pending_mode
                         .unwrap_or_else(|| host_sgr_pixels_active.load(Ordering::Acquire));
-                    if !framer.has_pending_input() {
-                        pending_mode = None;
-                    }
-                    if !send_unix_input_chunks(
-                        chunks,
+                    if !flush_unix_input_after_idle(
+                        &reader,
+                        &mut framer,
                         &event_tx,
                         &mut pending_palette,
                         sgr_pixels,
                         last_geometry,
-                    ) || !flush_unix_palette_input(&event_tx, &mut pending_palette)
-                    {
+                    ) {
                         return;
                     }
-                    if held_escape
-                        && stdin_read_ready(
-                            &reader,
-                            crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS,
-                        ) == Some(false)
-                    {
-                        let chunks = framer.flush_timeout();
-                        if !framer.has_pending_input() {
-                            pending_mode = None;
-                        }
-                        if !send_unix_input_chunks(
-                            chunks,
-                            &event_tx,
-                            &mut pending_palette,
-                            sgr_pixels,
-                            last_geometry,
-                        ) {
-                            return;
-                        }
+                    if !framer.has_pending_input() {
+                        pending_mode = None;
                     }
                 }
             }
@@ -364,6 +324,42 @@ fn flush_unix_palette_input(
     event_tx
         .blocking_send(ClientLoopEvent::StdinInput(data))
         .is_ok()
+}
+
+/// Shared idle flush for the startup replay and the main read loop: send
+/// whatever the framer can release, then release a held escape if no
+/// continuation arrives within the extra idle window.
+#[cfg(unix)]
+fn flush_unix_input_after_idle<R: AsRawFd>(
+    reader: &R,
+    framer: &mut crate::raw_input::RawInputByteFramer,
+    event_tx: &mpsc::Sender<ClientLoopEvent>,
+    pending_palette: &mut Vec<Vec<u8>>,
+    sgr_pixels: bool,
+    geometry: Option<crate::input::mouse::HostGeometry>,
+) -> bool {
+    let had_pending = framer.has_pending_input();
+    let chunks = framer.flush_timeout();
+    let held_escape = had_pending && chunks.is_empty();
+    if !send_unix_input_chunks(chunks, event_tx, pending_palette, sgr_pixels, geometry)
+        || !flush_unix_palette_input(event_tx, pending_palette)
+    {
+        return false;
+    }
+    if held_escape
+        && stdin_read_ready(reader, crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS)
+            == Some(false)
+        && !send_unix_input_chunks(
+            framer.flush_timeout(),
+            event_tx,
+            pending_palette,
+            sgr_pixels,
+            geometry,
+        )
+    {
+        return false;
+    }
+    true
 }
 
 #[cfg(unix)]
@@ -755,6 +751,83 @@ mod tests {
     fn raw_input_idle_flush_timeout_keeps_escape_responsive() {
         let timeout_ms = std::hint::black_box(crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS);
         assert!(timeout_ms <= 20);
+    }
+
+    #[test]
+    fn idle_flush_delivers_held_escape_before_the_following_key() {
+        // The probe watches a real descriptor, so the peer stays silent; the
+        // idle reader is what releases the held escape.
+        let (reader, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut pending_palette = Vec::new();
+        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+        framer.host_color_query_sent();
+        assert!(framer.push(b"\x1b").is_empty());
+
+        assert!(flush_unix_input_after_idle(
+            &reader,
+            &mut framer,
+            &tx,
+            &mut pending_palette,
+            false,
+            None,
+        ));
+        let ClientLoopEvent::StdinInput(escape) = rx.try_recv().unwrap() else {
+            panic!("expected the held escape to be flushed");
+        };
+        assert_eq!(escape, b"\x1b");
+
+        let chunks = framer.push(b"a");
+        assert!(send_unix_input_chunks(
+            chunks,
+            &tx,
+            &mut pending_palette,
+            false,
+            None,
+        ));
+        let ClientLoopEvent::StdinInput(key) = rx.try_recv().unwrap() else {
+            panic!("expected the following key");
+        };
+        assert_eq!(key, b"a");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_flush_keeps_a_held_escape_while_a_continuation_is_readable() {
+        use std::io::Write as _;
+
+        let (mut reader, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        peer.write_all(b"[A").unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut pending_palette = Vec::new();
+        let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
+        framer.host_color_query_sent();
+        assert!(framer.push(b"\x1b").is_empty());
+
+        assert!(flush_unix_input_after_idle(
+            &reader,
+            &mut framer,
+            &tx,
+            &mut pending_palette,
+            false,
+            None,
+        ));
+        assert!(rx.try_recv().is_err());
+
+        let mut scratch = [0u8; 8];
+        let read = reader.read(&mut scratch).unwrap();
+        let chunks = framer.push(&scratch[..read]);
+        assert!(send_unix_input_chunks(
+            chunks,
+            &tx,
+            &mut pending_palette,
+            false,
+            None,
+        ));
+        let ClientLoopEvent::StdinInput(sequence) = rx.try_recv().unwrap() else {
+            panic!("expected the reassembled escape sequence");
+        };
+        assert_eq!(sequence, b"\x1b[A");
     }
 
     #[cfg(not(target_os = "macos"))]

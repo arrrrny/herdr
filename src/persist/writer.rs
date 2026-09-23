@@ -115,15 +115,34 @@ fn preserve_snapshot_history(path: &Path) -> io::Result<()> {
             }
         }
     }
-    preserve_existing_in(path, "session-snapshots", SNAPSHOT_LIMIT)?;
+    preserve_existing_in(
+        path,
+        "session-snapshots",
+        SNAPSHOT_LIMIT,
+        PruneFailure::Rollback,
+    )?;
     Ok(())
 }
 
 fn preserve_existing(path: &Path) -> io::Result<bool> {
-    preserve_existing_in(path, "session-backups", 3)
+    preserve_existing_in(path, "session-backups", 3, PruneFailure::LogOnly)
 }
 
-fn preserve_existing_in(path: &Path, directory_name: &str, keep: usize) -> io::Result<bool> {
+/// What to do when pruning older recovery copies fails.
+#[derive(Clone, Copy)]
+enum PruneFailure {
+    /// The copy is the authoritative snapshot: drop it and report the failure.
+    Rollback,
+    /// The copy is a best-effort backup: keep it and only log the failure.
+    LogOnly,
+}
+
+fn preserve_existing_in(
+    path: &Path,
+    directory_name: &str,
+    keep: usize,
+    prune_failure: PruneFailure,
+) -> io::Result<bool> {
     let mut source = match File::open(path) {
         Ok(file) => file,
         // Recheck on the next mutation until a fresh session is actually saved.
@@ -168,7 +187,7 @@ fn preserve_existing_in(path: &Path, directory_name: &str, keep: usize) -> io::R
             "preserved session recovery copy"
         );
         if let Err(err) = prune_backups(&older, keep) {
-            if directory_name == "session-snapshots" {
+            if matches!(prune_failure, PruneFailure::Rollback) {
                 std::fs::remove_file(&backup)?;
                 return Err(err);
             }
