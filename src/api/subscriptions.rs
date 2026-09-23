@@ -210,8 +210,8 @@ impl ActiveSubscription {
                 pane_id,
                 agent_status,
             } => {
-                let last_sequence = event_hub.current_sequence();
                 let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
+                let last_sequence = event_hub.current_sequence();
                 let last_status = probe.agent_status;
                 let last_presentation = PanePresentationSnapshot::from(&probe);
                 let initial_event = agent_status

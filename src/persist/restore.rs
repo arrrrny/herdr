@@ -1757,6 +1757,8 @@ mod tests {
                 ),
                 Some(1),
             );
+            terminal.hook_authority.as_mut().unwrap().reported_at =
+                std::time::Instant::now() - std::time::Duration::from_secs(60);
             assert_eq!(terminal.state, state_before_handoff);
             let runtimes = crate::terminal::TerminalRuntimeRegistry::from(runtimes);
             let snapshot = crate::persist::capture(&workspaces, &terminals, &runtimes, Some(0), 0);
@@ -1790,6 +1792,13 @@ mod tests {
             drop(runtimes);
             let terminal = restored_terminals.values_mut().next().unwrap();
             assert_eq!(terminal.state, state_before_handoff);
+            let restored_report_age = std::time::Instant::now()
+                .saturating_duration_since(terminal.hook_authority.as_ref().unwrap().reported_at);
+            assert!(
+                (std::time::Duration::from_secs(50)..std::time::Duration::from_secs(70))
+                    .contains(&restored_report_age),
+                "handoff must preserve hook report age, got {restored_report_age:?}"
+            );
             terminal.set_detected_state(Some(crate::detect::Agent::Pi), AgentState::Idle);
             assert_eq!(
                 terminal.state, state_before_handoff,

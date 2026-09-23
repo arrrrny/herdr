@@ -1778,6 +1778,29 @@ mod tests {
     }
 
     #[test]
+    fn api_worktree_list_reports_stale_active_workspace() {
+        let mut app = test_app();
+        app.state.active = Some(7);
+
+        let response = run_deferred_api_request(
+            &mut app,
+            Request {
+                id: "req".into(),
+                method: crate::api::schema::Method::WorktreeList(WorktreeListParams {
+                    workspace_id: None,
+                    cwd: None,
+                    trust_repository: false,
+                }),
+            },
+        );
+
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.id, "req");
+        assert_eq!(error.error.code, "workspace_not_found");
+        assert_eq!(error.error.message, "workspace not found");
+    }
+
+    #[test]
     fn api_worktree_list_reports_open_workspace_ids() {
         let repo = create_committed_repo("api-worktree-list-repo");
         let checkout = unique_temp_path("api-worktree-list-checkout");
