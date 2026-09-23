@@ -77,3 +77,8 @@ src/platform/windows.rs                       ::  keep that descriptor
 src/integration/config_file.rs                ::  exclusively-created descriptor
 src/integration/targets.rs                    ::  write_letta_staged_file
 src/integration/tests.rs                      ::  install_letta_keeps_a_symlinked_settings_file
+
+# Sync-guardrail wiring: the fork's own maintenance-test entry sits on a shared
+# justfile line that upstream also edits, so it needs the same survival check as
+# the rest of the fork. The 2026-09-18 sync conflicted on exactly this line.
+justfile                                      ::  test_fork_owned_guard
