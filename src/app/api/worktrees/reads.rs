@@ -255,7 +255,9 @@ impl App {
                     .as_ref()
                     .and_then(|id| self.state.workspaces.iter().position(|ws| &ws.id == id))
                     .filter(|&idx| {
-                        let ws = &self.state.workspaces[idx];
+                        let Some(ws) = self.state.workspaces.get(idx) else {
+                            return false;
+                        };
                         if let Some(current) = ws.worktree_space() {
                             !current.is_linked_worktree
                                 && current.key == source.repo_key
