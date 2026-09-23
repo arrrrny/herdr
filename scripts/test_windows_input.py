@@ -236,6 +236,29 @@ class WindowsInputGauntletTests(unittest.TestCase):
         for status in ["unsupported", "not_run", "inconclusive"]:
             self.assertEqual(verdict(self.cases["letter-a"], "legacy", {**row, "status": status})[0], status)
 
+    def test_out_of_matrix_observations_are_reported_without_sorting_errors(self):
+        row = {
+            **self.evidence,
+            "case": "letter-a",
+            "host": "stable",
+            "path": "herdr",
+            "mode": "legacy",
+            "phase": "unexpected",
+            "width": 120,
+            "height": 30,
+            "outer_geometry": [120, 30],
+            "final_outer_geometry": [120, 30],
+        }
+        result = summarize({
+            "observations": [row],
+            "geometries": [{"width": 120, "height": 30, "full": True}],
+            "cases": ["letter-a"],
+            "channels": ["stable"],
+            "paths": ["herdr"],
+            "modes": ["legacy"],
+        })
+        self.assertIn("1 observations outside the declared run matrix", result["errors"])
+
     def test_malformed_native_records_are_inconclusive_not_exceptions(self):
         evidence = {**self.evidence, "scans": [30]}
         for records in [None, 7, "records", [None], [[1, 1, 1, 65, 30, 97, None]],

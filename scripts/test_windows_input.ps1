@@ -116,9 +116,15 @@ function Get-GauntletClientTrace($Plan) {
     # The client log grows independently of the transport log, so this keeps its
     # own cursor rather than reusing the transport line count.
     $log = Join-Path $Plan.config_home "herdr/sessions/$($Plan.session)/herdr-client.log"
-    if (-not (Test-Path -LiteralPath $log)) { return $null }
-    $lines = @(Get-Content -LiteralPath $log | Where-Object { $_ -like '*windows input trace: input batch*' })
+    $file = Get-Item -LiteralPath $log -ErrorAction SilentlyContinue
+    if ($null -eq $file) { return $null }
+    $createdAt = $file.CreationTimeUtc.Ticks
     $since = if ($Plan.ContainsKey('client_trace_lines')) { [int]$Plan.client_trace_lines } else { 0 }
+    if ($Plan.ContainsKey('client_trace_created_at') -and $Plan.client_trace_created_at -ne $createdAt) {
+        $since = 0
+    }
+    $lines = @(Read-GauntletLines $log | Where-Object { $_ -like '*windows input trace: input batch*' })
+    $Plan.client_trace_created_at = $createdAt
     $Plan.client_trace_lines = $lines.Count
     if ($lines.Count -le $since) { return @() }
     return @($lines | Select-Object -Skip $since)
@@ -133,6 +139,10 @@ function Set-ObservedGeometry($Plan, $Window, $WindowPid, $Width, $Height) {
         [HerdrInputGauntlet.Desktop]::Resize($Window, $Plan.nonce, $WindowPid, ($Width - $w) * 8, ($Height - $h) * 16)
         Start-Sleep -Milliseconds 350
         Update-GauntletLease $root
+        # The final resize + settle is never re-measured by the loop; measure it once more
+        # so a geometry that was actually reached is not reported as "not reached".
+        $settled = Outer-State $Plan
+        if ([int]$settled.geometry[0] -eq $Width -and [int]$settled.geometry[1] -eq $Height) { return $settled }
     }
     return $null
 }
@@ -248,8 +258,12 @@ try {
                 # Return narrow after wide to exercise repeated reflow/recovery.
                 $geometries += @{ width = 80; height = 30; full = $false }
                 $phase = 0
+                # The driver's plan is authoritative evidence for the oracle: record it with
+                # the document so report.py never rebuilds it (and drifts) independently.
+                $document.geometries = @()
                 foreach ($geometry in $geometries) {
                     $phase++
+                    $document.geometries += @{ width = $geometry.width; height = $geometry.height; full = [bool]$geometry.full }
                     $selected = if ($geometry.full) { $selectedCases } else { @($selectedCases | Where-Object { $_.id -in @('letter-a', 'shift-enter', 'paste-lf', 'mouse-focus-refresh') }) }
                     $outer = Set-ObservedGeometry $plan $window $windowPid $geometry.width $geometry.height
                     foreach ($case in $selected) {
@@ -283,7 +297,7 @@ try {
                             $row.status = 'not_run'; $row.reason = 'Clipboard is not empty; refusing to replace user data'; continue
                         }
                         if ($case.kind -in @('mouse-interleave', 'mouse-focus-refresh')) { $null = Observer-Request $plan 'mouse-on'; $mouseReporting = $true }
-                        $traceLineCount = if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) { @(Get-Content -LiteralPath $plan.input_trace).Count } else { 0 }
+                        $traceLineCount = if ($path -in @('herdr', 'herdr-remote')) { (Read-GauntletLines $plan.input_trace).Count } else { 0 }
                         $begin = Observer-Request $plan 'begin'
                         $row.ready = $true; $row.pane_geometry = $begin.geometry
                         [HerdrInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid)
@@ -356,8 +370,8 @@ try {
                         }
                         $row.final_outer_geometry = (Outer-State $plan).geometry
                         $row.status = 'observed'; $row.final_pane_geometry = $end.geometry
-                        if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) {
-                            $traceLines = @(Get-Content -LiteralPath $plan.input_trace)
+                        if ($path -in @('herdr', 'herdr-remote')) {
+                            $traceLines = Read-GauntletLines $plan.input_trace
                             $trace = $traceLines -join "`n"
                             $captureTrace = ($traceLines | Select-Object -Skip $traceLineCount) -join "`n"
                             $row.input_reader = if ($trace.Contains('reader=windows-console')) { 'windows-console' } elseif ($trace.Contains('reader=crossterm')) { 'crossterm' } else { 'unknown' }
@@ -370,7 +384,12 @@ try {
                             if ($null -ne $clientEvents) { $row.client_events = $clientEvents }
                         }
                         if ($null -ne $clipboardSequence) {
-                            if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
+                            if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) {
+                                # The clipboard stayed busy/locked: wait briefly and retry once
+                                # before treating the cleanup as a campaign-fatal failure.
+                                Start-Sleep -Milliseconds 250
+                                if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
+                            }
                             $clipboardSequence = $null
                         }
                         if ($mouseReporting) { $null = Observer-Request $plan 'mouse-off'; $mouseReporting = $false }

@@ -1,5 +1,6 @@
 pub mod client;
 mod event_hub;
+pub(crate) mod http_push;
 pub mod schema;
 mod server;
 mod status;
@@ -84,6 +85,8 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PluginPaneOpen(_)
             | Method::PluginPaneFocus(_)
             | Method::PluginPaneClose(_)
+            | Method::BadgeSet(_)
+            | Method::BadgeClear(_)
     )
 }
 

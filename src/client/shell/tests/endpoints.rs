@@ -547,16 +547,7 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
 fn sidebar_renders_local_and_saved_ssh_endpoints_with_status() {
     let (mut state, _) = state_with_remote();
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local"));
     assert!(text.contains("Build"));
     assert!(text.contains("remote-workspace"));
@@ -1037,16 +1028,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("○ Local · local agent"), "frame: {text}");
     assert!(text.contains("× Build · remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
@@ -1105,16 +1087,7 @@ fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     state.set_test_endpoint_agent_view(&endpoint_id, Some(view));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(!text.contains("Build · remote agent"), "frame: {text}");
 
@@ -1123,16 +1096,7 @@ fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     remote_surface.boot_id = "remote-boot".into();
     state.set_pane_surface(remote_surface);
     let frame = state.compose(100, 28).expect("remote endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(!text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
 }
@@ -1192,16 +1156,7 @@ fn current_workspace_or_blocked_keeps_foreign_attention_only() {
     state.set_test_endpoint_agent_view(&ClientEndpointId::Local, Some(view));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(!text.contains("Build · remote idle"), "frame: {text}");
     assert!(text.contains("Build · remote blocked"), "frame: {text}");
@@ -1248,16 +1203,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
     );
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
@@ -1334,16 +1280,7 @@ fn legacy_custom_views_keep_v1_per_endpoint_projection() {
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
 
     let frame = state.compose(100, 28).expect("legacy combined frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
 }
@@ -1386,16 +1323,7 @@ fn selected_custom_sort_orders_rendering_and_indexed_navigation() {
     state.set_test_endpoint_agent_view(&ClientEndpointId::Local, Some(view));
 
     let frame = state.compose(100, 28).expect("custom sorted frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(
         text.find("Build · remote idle").expect("remote row")
             < text.find("Local · local blocked").expect("local row"),
@@ -1511,16 +1439,7 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
     state.set_snapshot(Box::new(local));
     let frame_text = |state: &mut ClientShellState| {
         let frame = state.compose(100, 28).expect("combined endpoint frame");
-        frame
-            .cells
-            .chunks(frame.width as usize)
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.symbol.as_str())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        frame_rows(&frame).join("\n")
     };
     let text = frame_text(&mut state);
     assert!(
@@ -1974,16 +1893,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
 
     state.mark_endpoint_disconnected(&endpoint_id);
     let frame = state.compose(100, 28).expect("frozen endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
 
     assert_eq!(state.pending_integration_installs, 0);
     assert_eq!(
@@ -2119,17 +2029,7 @@ fn navigator_uses_machine_parents_only_for_federated_clients() {
     local.set_pane_surface(surface());
     let frame = local.compose(100, 28).expect("local-only sidebar");
     assert!(local.hits.machines.is_empty());
-    assert!(!frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .contains(" machines"));
+    assert!(!frame_rows(&frame).join("\n").contains(" machines"));
     local.open_navigator_overlay();
     let ClientShellOverlay::Navigator(navigator) = local.overlay.as_ref().expect("navigator")
     else {

@@ -29,23 +29,6 @@ pub(crate) use bootstrap::{configure_server_daemon_context, prepare_server_proce
 #[cfg(test)]
 mod config_file_tests;
 
-pub(crate) fn config_file_link_count(path: &Path) -> std::io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-    Ok(std::fs::metadata(path)?.nlink())
-}
-
-pub(crate) fn check_config_write_target(_target: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
-}
-
-pub(crate) fn write_existing_config(
-    _target: &std::path::Path,
-    _contents: &[u8],
-) -> std::io::Result<bool> {
-    // Unix keeps atomic replacement for existing files too.
-    Ok(false)
-}
-
 pub(crate) fn create_config_temporary(
     path: &Path,
     private: bool,
@@ -132,14 +115,13 @@ pub(crate) fn create_config_temporary(
 
 pub(crate) fn write_config_temporary(
     source: Option<&Path>,
-    temporary: &Path,
+    mut output: std::fs::File,
     contents: &[u8],
 ) -> std::io::Result<()> {
+    // `create_config_temporary` created this file exclusively; keep that descriptor
+    // instead of reopening the staging path by name, which a local actor with write
+    // access to the config directory could have swapped for a symlink in between.
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-    let mut output = std::fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .open(temporary)?;
     if let Some(source) = source {
         let input = std::fs::File::open(source)?;
         let metadata = input.metadata()?;
@@ -181,7 +163,11 @@ pub(crate) fn should_query_host_terminal_palette() -> bool {
 }
 
 fn raw_command_argv(command: &str, flag: &str) -> Vec<std::ffi::OsString> {
-    vec!["/bin/sh".into(), flag.into(), command.into()]
+    vec![
+        super::user_login_shell().into_os_string(),
+        flag.into(),
+        command.into(),
+    ]
 }
 
 pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::process::Command {
@@ -194,7 +180,7 @@ pub(crate) fn detached_custom_command_process_platform(command: &str) -> std::pr
 pub(crate) fn pane_custom_command_pty_builder_platform(
     command: &str,
 ) -> portable_pty::CommandBuilder {
-    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-c"))
+    portable_pty::CommandBuilder::from_argv(raw_command_argv(command, "-lc"))
 }
 
 pub(crate) fn scrollback_editor_argv(path: &Path) -> std::io::Result<Vec<String>> {
@@ -735,16 +721,34 @@ fn unique_timestamp_nanos() -> u128 {
 /// Prefer `terminal-notifier` when it is installed because it can activate the
 /// hosting terminal on click. Fall back to built-in AppleScript notifications
 /// when it is not available.
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
-    show_desktop_notification_with_command(title, body, |program| Command::new(program))
+///
+/// When `click_target` is `Some(public_pane_id)` (the canonical pane id of the
+/// form `<workspace_id>:p<encoded>`), a marker file is written at
+/// `<config_dir>/notification_click_target.json` and the terminal-notifier
+/// command is given `-execute <current_exe>` so that clicking the
+/// notification's "Show" action runs the herdr binary as a shell command. The
+/// fresh binary detects the click-handler launch (no args + no TTY on stdin +
+/// a fresh marker file) and dispatches a `pane.focus` API request to the
+/// running TUI, which calls `focus_pane_in_workspace`. See
+/// `cli::notification_click`.
+pub fn show_desktop_notification(
+    title: &str,
+    body: Option<&str>,
+    click_target: Option<&str>,
+) -> std::io::Result<bool> {
+    show_desktop_notification_with_command(title, body, click_target, |program| {
+        Command::new(program)
+    })
 }
 
 fn show_desktop_notification_with_command(
     title: &str,
     body: Option<&str>,
+    click_target: Option<&str>,
     mut command: impl FnMut(&str) -> Command,
 ) -> std::io::Result<bool> {
-    if show_terminal_notifier_notification(title, body, &mut command).unwrap_or(false) {
+    if show_terminal_notifier_notification(title, body, click_target, &mut command).unwrap_or(false)
+    {
         return Ok(true);
     }
 
@@ -754,6 +758,7 @@ fn show_desktop_notification_with_command(
 fn show_terminal_notifier_notification(
     title: &str,
     body: Option<&str>,
+    click_target: Option<&str>,
     command: &mut impl FnMut(&str) -> Command,
 ) -> std::io::Result<bool> {
     let activate_bundle_id = verified_terminal_bundle_identifier(command);
@@ -761,6 +766,7 @@ fn show_terminal_notifier_notification(
         title,
         body,
         activate_bundle_id.as_deref(),
+        click_target,
         command,
     )
 }
@@ -769,10 +775,11 @@ fn show_terminal_notifier_notification_with_options(
     title: &str,
     body: Option<&str>,
     activate_bundle_id: Option<&str>,
+    click_target: Option<&str>,
     command: &mut impl FnMut(&str) -> Command,
 ) -> std::io::Result<bool> {
     let mut cmd = command("terminal-notifier");
-    build_terminal_notifier_command(&mut cmd, title, body, activate_bundle_id);
+    build_terminal_notifier_command(&mut cmd, title, body, activate_bundle_id, click_target);
     run_notification_command(cmd)
 }
 
@@ -781,12 +788,66 @@ fn build_terminal_notifier_command(
     title: &str,
     body: Option<&str>,
     activate_bundle_id: Option<&str>,
+    click_target: Option<&str>,
 ) {
     cmd.arg("-title").arg(title);
     cmd.arg("-message").arg(body.unwrap_or_default());
     if let Some(bundle_id) = activate_bundle_id {
         cmd.arg("-activate").arg(bundle_id);
     }
+    if let Some(target) = click_target {
+        // Persist the click target so the launched binary can pick it up.
+        // Best-effort: a failed write must not block the notification itself.
+        let _ = write_notification_click_target(target);
+        // terminal-notifier runs `-execute` as a shell command (via
+        // `/bin/sh -c`) when the user clicks the notification. Point it
+        // directly at this binary so the click-handler heuristic in
+        // `cli::notification_click` runs: launching herdr with no args and no
+        // controlling TTY is exactly what `handle_if_click_launch` detects,
+        // and it then dispatches a `pane.focus` request to the running TUI.
+        // A `file://` URL does NOT work here — the shell would try to run the
+        // URL string as a command and fail silently.
+        if let Some(binary_path) = std::env::current_exe()
+            .ok()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            cmd.arg("-execute").arg(binary_path);
+        }
+    }
+}
+
+/// Marker file path at `<config_dir>/notification_click_target.json`.
+///
+/// Kept session-agnostic so the click-launched binary (which has no
+/// `HERDR_SESSION` env when spawned by NSWorkspace) reads the same path
+/// the running TUI wrote.
+pub(crate) fn notification_click_target_path() -> PathBuf {
+    crate::config::config_dir().join("notification_click_target.json")
+}
+
+/// Writes the marker file containing the public pane id and the current time
+/// (ms since UNIX_EPOCH). Caller is `show_desktop_notification` on macOS.
+fn write_notification_click_target(public_pane_id: &str) -> std::io::Result<()> {
+    let path = notification_click_target_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let body = format_notification_click_target_json(public_pane_id, now_ms);
+    std::fs::write(&path, body)
+}
+
+/// Renders the marker file body. Separated so tests can verify the exact
+/// shape without going through the filesystem.
+fn format_notification_click_target_json(public_pane_id: &str, written_at_ms: u128) -> String {
+    format!(
+        "{{\"pane_id\":{pane_id},\"written_at_ms\":{ts}}}",
+        pane_id = serde_json::to_string(public_pane_id).unwrap_or_else(|_| "".into()),
+        ts = written_at_ms
+    )
 }
 
 fn show_osascript_notification(
@@ -1144,9 +1205,39 @@ pub fn process_exists(pid: u32) -> bool {
     }
 }
 
+/// Finds the PID of the process that owns the listening Unix domain socket at
+/// `socket_path`, if any. Used by `herdr server stop` to recover from the
+/// partial-shutdown state (issue #11) where the status API socket is missing
+/// but the server process is still alive on the client socket.
+///
+/// On macOS, `lsof -t <path>` returns the PIDs of processes that have the file
+/// open. For a Unix domain socket, this is the process that bound it.
+pub fn find_unix_socket_owner_pid(socket_path: &std::path::Path) -> Option<u32> {
+    let output = std::process::Command::new("lsof")
+        .arg("-t")
+        .arg(socket_path)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the global `XDG_CONFIG_HOME` env var so
+    /// they don't clobber each other when the suite runs in parallel
+    /// (cargo/nextest run tests concurrently by default).
+    static XDG_CONFIG_HOME_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn nofile_target_raises_low_soft_limit_to_cap_when_hard_is_unlimited() {
@@ -1274,6 +1365,7 @@ mod tests {
             "pi finished",
             Some("workspace 1"),
             Some("com.mitchellh.ghostty"),
+            None,
         );
         let args = cmd
             .get_args()
@@ -1312,6 +1404,7 @@ mod tests {
             "title",
             Some("body"),
             Some("com.mitchellh.ghostty"),
+            None,
             &mut command,
         )
         .expect("terminal-notifier command should run");
@@ -1342,8 +1435,9 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
                 .env("HERDR_NOTIFY_ARGS", &path);
             cmd
         };
-        let shown = show_desktop_notification_with_command("title", Some("body"), &mut command)
-            .expect("osascript fallback should run");
+        let shown =
+            show_desktop_notification_with_command("title", Some("body"), None, &mut command)
+                .expect("osascript fallback should run");
 
         assert!(shown);
         let args = std::fs::read_to_string(&path).expect("args file");
@@ -1363,5 +1457,181 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
         assert_eq!(argv[1], "-c");
         assert!(argv[2].contains("EDITOR:-vi"));
         assert!(argv[2].contains("/tmp/herdr scrollback.txt"));
+    }
+
+    #[test]
+    fn notification_click_target_json_shape_is_stable() {
+        let body = format_notification_click_target_json("wA:pA", 1_700_000_000_000u128);
+        assert_eq!(
+            body,
+            "{\"pane_id\":\"wA:pA\",\"written_at_ms\":1700000000000}"
+        );
+    }
+
+    #[test]
+    fn notification_click_target_json_escapes_pane_id() {
+        // Public pane ids are normally restricted to a small alphabet, but
+        // serde_json::to_string is still used so a hostile value can't break
+        // the JSON shape.
+        let body = format_notification_click_target_json("a\"b\\c", 0u128);
+        assert_eq!(body, "{\"pane_id\":\"a\\\"b\\\\c\",\"written_at_ms\":0}");
+    }
+
+    #[test]
+    fn notification_click_target_path_lives_in_config_dir() {
+        // Use a temp XDG_CONFIG_HOME so we don't pollute the user's real
+        // config dir during tests.
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
+        let sandbox = std::env::temp_dir().join(format!(
+            "herdr-macos-notif-target-path-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &sandbox);
+        let path = notification_click_target_path();
+        match prev {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let expected = sandbox
+            .join("herdr-dev")
+            .join("notification_click_target.json");
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn build_terminal_notifier_command_writes_marker_and_execute_when_target_given() {
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
+        let sandbox = std::env::temp_dir().join(format!(
+            "herdr-macos-notif-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &sandbox);
+
+        let mut cmd = Command::new("terminal-notifier");
+        build_terminal_notifier_command(
+            &mut cmd,
+            "claude finished",
+            Some("ws 1 / pane 2"),
+            None,
+            Some("wA:pB"),
+        );
+
+        let marker_path = notification_click_target_path();
+        let body = std::fs::read_to_string(&marker_path).expect("marker file should be written");
+        match prev {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        assert!(
+            body.contains("\"pane_id\":\"wA:pB\""),
+            "marker body should contain the pane id: {body}"
+        );
+        assert!(
+            body.contains("\"written_at_ms\":"),
+            "marker body should contain the timestamp: {body}"
+        );
+
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let execute_idx = args
+            .iter()
+            .position(|arg| arg == "-execute")
+            .expect("command should include -execute");
+        let binary_path = &args[execute_idx + 1];
+        // `-execute` must carry the bare herdr binary path (resolved from
+        // current_exe), not a `file://` URL — terminal-notifier runs the value
+        // as a shell command, so a `file://` URL would fail silently.
+        assert!(
+            !binary_path.starts_with("file://"),
+            "execute must be a plain path, not a file:// URL: {binary_path}"
+        );
+        assert!(
+            std::path::Path::new(&binary_path).exists(),
+            "execute path must point at a real file: {binary_path}"
+        );
+    }
+
+    #[test]
+    fn build_terminal_notifier_command_omits_execute_when_no_target() {
+        let mut cmd = Command::new("terminal-notifier");
+        build_terminal_notifier_command(
+            &mut cmd,
+            "title",
+            Some("body"),
+            Some("com.mitchellh.ghostty"),
+            None,
+        );
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(
+            !args.iter().any(|arg| arg == "-execute"),
+            "command should not include -execute when no click target: {args:?}"
+        );
+    }
+
+    #[test]
+    fn build_terminal_notifier_command_execute_is_plain_path_not_file_url() {
+        // Regression guard: `-execute` must be the bare binary path so the
+        // shell can launch it. A `file://` URL would be passed verbatim to
+        // `/bin/sh -c` and fail silently (see arrrrny/herdr#27 / #32).
+        let _guard = XDG_CONFIG_HOME_LOCK.lock().unwrap();
+        // Route the sidecar marker into a temp dir so the test doesn't leave
+        // a stale marker in the user's real config dir.
+        let sandbox = std::env::temp_dir().join(format!(
+            "herdr-macos-notif-execute-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&sandbox).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &sandbox);
+        let mut cmd = Command::new("terminal-notifier");
+        build_terminal_notifier_command(
+            &mut cmd,
+            "title",
+            Some("body"),
+            Some("com.mitchellh.ghostty"),
+            Some("wA:pB"),
+        );
+        match prev {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let execute_idx = args
+            .iter()
+            .position(|arg| arg == "-execute")
+            .expect("command should include -execute");
+        let value = &args[execute_idx + 1];
+        assert!(
+            !value.starts_with("file://"),
+            "-execute must be a plain path, got: {value}"
+        );
+        assert!(
+            std::path::Path::new(value).exists(),
+            "-execute must point at a real file: {value}"
+        );
     }
 }
