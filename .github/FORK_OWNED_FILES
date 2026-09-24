@@ -78,6 +78,17 @@ src/integration/config_file.rs                ::  exclusively-created descriptor
 src/integration/targets.rs                    ::  write_letta_staged_file
 src/integration/tests.rs                      ::  install_letta_keeps_a_symlinked_settings_file
 
+# 2026-09-23 upstream-sync hand unions: preserve the fork's Windows input
+# cleanup, retry, ownership, and report-survival behavior alongside upstream's
+# newer probe and matrix changes.
+scripts/test_windows_input.ps1               ::  herdr-remote')) { (Read-GauntletLines
+scripts/test_windows_input.ps1               ::  client_trace_created_at
+scripts/windows_input/Common.ps1              ::  function Read-GauntletLines($Path) {
+scripts/windows_input/Native.cs              ::  ClearIfNonKey
+scripts/windows_input/Probe.ps1               ::  ClearIfNonKey
+scripts/windows_input/report.py               ::  errors_out_of_matrix
+scripts/test_windows_input.py                ::  out_of_matrix_observations_are_reported
+
 # Sync-guardrail wiring: the fork's own maintenance-test entry sits on a shared
 # justfile line that upstream also edits, so it needs the same survival check as
 # the rest of the fork. The 2026-09-18 sync conflicted on exactly this line.

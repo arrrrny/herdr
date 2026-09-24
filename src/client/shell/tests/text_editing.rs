@@ -376,9 +376,9 @@ fn copy_search_owns_prefix_but_parked_prompt_does_not_steal_input() {
 
 #[test]
 fn every_field_renders_long_unicode_across_resize_without_mutation() {
-    // Field 7 is the help overlay, which declines to compose when its popup cannot
-    // reach its 20x6 inner minimum; a 12x6 viewport is the only size in this ladder
-    // where a field may stay unframed.
+    // Fields 6 and 7 are the Navigator and help overlays. They intentionally
+    // decline to compose below their minimum popup dimensions; a 12x6 viewport
+    // is the only size in this ladder where either field may stay unframed.
     for field in 0..10 {
         let mut state = shell(field);
         *editor(&mut state) = TextEditor::new(&"e\u{301}中👩‍💻".repeat(40), false);
@@ -387,8 +387,12 @@ fn every_field_renders_long_unicode_across_resize_without_mutation() {
             for (width, height) in [(120, 40), (60, 20), (12, 6), (1, 1), (120, 40)] {
                 let before = editor(&mut state).clone();
                 let frame = state.compose(width, height);
-                let help_viewport_too_small = field == 7 && (width < 20 || height < 6);
-                if width > 1 && height > 1 && !help_viewport_too_small {
+                let viewport_too_small = match field {
+                    6 => width < 8 || height < 11,
+                    7 => width < 26 || height < 10,
+                    _ => false,
+                };
+                if width > 1 && height > 1 && !viewport_too_small {
                     assert!(
                         frame.is_some(),
                         "field {field} failed to compose at {width}x{height}"

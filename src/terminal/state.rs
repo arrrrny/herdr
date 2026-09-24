@@ -28,14 +28,29 @@ pub(crate) const FULL_LIFECYCLE_HOOK_STALE_THRESHOLD: Duration = Duration::from_
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HookAuthority {
     pub source: String,
     pub agent_label: String,
     pub state: AgentState,
     pub message: Option<String>,
+    #[serde(skip, default = "Instant::now")]
     pub reported_at: Instant,
+    /// Age of `reported_at` at the moment this authority crossed a serialized
+    /// boundary. `Instant` cannot be serialized, so the receiving side rebuilds
+    /// `reported_at` from this age instead of re-stamping it as "now", which
+    /// would hand an already-stale report another full staleness window.
+    #[serde(default)]
+    pub reported_age_ms: u64,
     pub session_ref: Option<crate::agent_resume::AgentSessionRef>,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HandoffAgentState {
+    authority: HookAuthority,
+    sequence: Option<u64>,
+    acquisition_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,12 +171,14 @@ pub struct TerminalState {
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
     pub last_agent_state_change_seq: Option<u64>,
+    pub last_agent_completion_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
     pub respawn_shell_on_exit: bool,
     recent_agent_process_exit: Option<RecentAgentProcessExit>,
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
+    pub restore_error: Option<String>,
 }
 
 impl TerminalState {
@@ -191,12 +208,14 @@ impl TerminalState {
             metadata_token_sequence_sources: std::collections::HashSet::new(),
             state: AgentState::Unknown,
             last_agent_state_change_seq: None,
+            last_agent_completion_seq: None,
             revision: 0,
             launch_argv: None,
             respawn_shell_on_exit: false,
             recent_agent_process_exit: None,
             agent_process_acquisition_pending: false,
             pending_agent_resume_plan: None,
+            restore_error: None,
         }
     }
 
@@ -221,6 +240,45 @@ impl TerminalState {
             self.agent_process_acquisition_pending = true;
         }
         mutation
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn handoff_agent_state(&self) -> Option<HandoffAgentState> {
+        if !self.live_full_lifecycle_hook_authority() {
+            return None;
+        }
+        let authority = self.hook_authority.as_ref()?;
+        let mut authority = authority.clone();
+        let sequence = self.hook_report_sequences.get(&authority.source).copied();
+        // Carry the report's age: the receiving process cannot read our clock,
+        // and a fresh `reported_at` there would waive the staleness rule.
+        authority.reported_age_ms = Instant::now()
+            .saturating_duration_since(authority.reported_at)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        Some(HandoffAgentState {
+            authority,
+            sequence,
+            acquisition_pending: self.agent_process_acquisition_pending,
+        })
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn restore_handoff_agent_state(&mut self, snapshot: HandoffAgentState) {
+        let mut snapshot = snapshot;
+        // Rebuild the report time from the carried age so an authority that was
+        // already stale before the handoff does not look fresh here.
+        snapshot.authority.reported_at = Instant::now()
+            .checked_sub(Duration::from_millis(snapshot.authority.reported_age_ms))
+            .unwrap_or(snapshot.authority.reported_at);
+        if let Some(sequence) = snapshot.sequence {
+            self.hook_report_sequences
+                .insert(snapshot.authority.source.clone(), sequence);
+        }
+        self.detected_agent = crate::detect::parse_agent_label(&snapshot.authority.agent_label);
+        self.state = snapshot.authority.state;
+        self.hook_authority = Some(snapshot.authority);
+        self.agent_process_acquisition_pending = snapshot.acquisition_pending;
     }
 
     pub(crate) fn finish_agent_process_acquisition(&mut self) -> bool {
@@ -361,6 +419,10 @@ impl TerminalState {
                 == agent
             {
                 self.detected_agent = agent;
+                self.fallback_state = fallback_state;
+                self.fallback_visible_blocker =
+                    visible_blocker && fallback_state == AgentState::Blocked;
+                self.fallback_observed_at = Some(now);
             }
             return TerminalStateMutation {
                 effective_state_change: self.recompute_effective_state(
@@ -596,14 +658,18 @@ impl TerminalState {
         if agent.is_none() && self.recent_agent_process_exit.is_some() {
             self.clear_agent_name();
         }
+        let effective_state_change = self.recompute_effective_state(
+            previous_agent_label,
+            previous_known_agent,
+            previous_state,
+            previous_presentation,
+            now,
+        );
+        if fallback_state == AgentState::Working && self.state == AgentState::Working {
+            self.agent_process_acquisition_pending = false;
+        }
         TerminalStateMutation {
-            effective_state_change: self.recompute_effective_state(
-                previous_agent_label,
-                previous_known_agent,
-                previous_state,
-                previous_presentation,
-                now,
-            ),
+            effective_state_change,
             session_ref_changed: previous_session
                 != self.current_session_identity_for_persistence(),
             agent_released,
@@ -751,17 +817,22 @@ impl TerminalState {
             state,
             message,
             reported_at: now,
+            reported_age_ms: 0,
             session_ref,
         });
         let current_session = self.current_session_identity_for_persistence();
+        let effective_state_change = self.recompute_effective_state(
+            previous_agent_label,
+            previous_known_agent,
+            previous_state,
+            previous_presentation,
+            now,
+        );
+        if state == AgentState::Working && self.state == AgentState::Working {
+            self.agent_process_acquisition_pending = false;
+        }
         Some(TerminalStateMutation {
-            effective_state_change: self.recompute_effective_state(
-                previous_agent_label,
-                previous_known_agent,
-                previous_state,
-                previous_presentation,
-                now,
-            ),
+            effective_state_change,
             session_ref_changed: previous_session != current_session,
             agent_released: false,
         })
@@ -1021,6 +1092,7 @@ impl TerminalState {
                     state,
                     message: message.map(str::to_string),
                     reported_at,
+                    reported_age_ms: 0,
                     session_ref: Some(session_ref),
                 },
                 seq,
@@ -1647,6 +1719,10 @@ impl TerminalState {
         }
         self.persisted_agent_session = Some(persisted_session);
         let current_session = self.current_session_identity_for_persistence();
+        if previous_session.is_some() && previous_session != current_session {
+            // Rebinding can expose a cached Working screen; only a fresh report ends acquisition.
+            self.agent_process_acquisition_pending = true;
+        }
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
                 previous_agent_label,
@@ -1981,6 +2057,7 @@ impl TerminalState {
         timeout: Duration,
     ) {
         self.set_agent_name(name);
+        self.agent_process_acquisition_pending = true;
         self.agent_name_owner = Some(AgentNameOwner {
             agent_label: crate::detect::agent_label(kind).to_string(),
             session_ref: None,
@@ -2148,6 +2225,7 @@ impl TerminalState {
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
         self.last_agent_state_change_seq = None;
+        self.last_agent_completion_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit = None;
@@ -2526,7 +2604,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(terminal.fallback_state, AgentState::Blocked);
         assert_eq!(terminal.state, AgentState::Working);
         assert!(change.is_none());
     }
@@ -3740,7 +3818,7 @@ mod tests {
             false,
         );
 
-        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(terminal.fallback_state, AgentState::Blocked);
         assert_eq!(terminal.state, AgentState::Working);
         assert!(change.is_none());
     }
@@ -3878,7 +3956,7 @@ mod tests {
             now + Duration::from_secs(10),
         );
 
-        assert_eq!(terminal.fallback_state, AgentState::Working);
+        assert_eq!(terminal.fallback_state, AgentState::Idle);
         assert_eq!(terminal.state, AgentState::Working);
     }
 
@@ -3944,7 +4022,7 @@ mod tests {
             now + Duration::from_millis(1),
         );
 
-        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(terminal.fallback_state, AgentState::Working);
         assert_eq!(terminal.state, AgentState::Idle);
         assert!(change.effective_state_change.is_none());
     }
@@ -3981,7 +4059,7 @@ mod tests {
             now + Duration::from_millis(1),
         );
 
-        assert_eq!(terminal.fallback_state, AgentState::Idle);
+        assert_eq!(terminal.fallback_state, AgentState::Working);
         assert_eq!(terminal.state, AgentState::Idle);
         assert!(change.effective_state_change.is_none());
     }
@@ -4206,11 +4284,11 @@ mod tests {
     #[test]
     fn full_lifecycle_hook_authority_fresh_keeps_screen_state_ignored() {
         // While the hook authority is fresh (reported within the staleness
-        // threshold), screen-derived state must NOT override the hook report:
-        // the hook remains authoritative. This is the existing contract.
+        // threshold), refresh the screen-derived fallback without letting it
+        // override the hook report.
         let now = Instant::now();
         let mut terminal = test_terminal();
-        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Unknown);
         anchor_full_lifecycle_session(
             &mut terminal,
             Agent::Pi,
