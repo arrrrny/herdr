@@ -1209,6 +1209,301 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     cleanup_test_base(&base);
 }
 
+/// A link that goes quiet without closing never delivers an EOF: the ssh child and its local
+/// bridge socket stay open and simply stop carrying data. The saved machine must still be
+/// re-dialed on its own, within a bounded interval, without the user detaching and reattaching.
+#[test]
+fn saved_machine_recovers_from_a_silent_ssh_stall() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let remote_config = base.join("remote-config");
+    let remote_runtime = base.join("remote-runtime");
+    let remote_api = remote_runtime.join("herdr.sock");
+    let remote_client = remote_runtime.join("herdr-client.sock");
+    let remote_server = spawn_server(&remote_config, &remote_runtime, &remote_api, &remote_client);
+    wait_for_socket(&remote_api, Duration::from_secs(10));
+    wait_for_socket(&remote_client, Duration::from_secs(10));
+    let created = send_json_request(
+        &remote_api,
+        &serde_json::json!({
+            "id": "remote-workspace", "method": "workspace.create",
+            "params": {"cwd": base, "focus": true, "label": "remote-ready"},
+        })
+        .to_string(),
+    );
+    let remote_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    send_pane_shell_command(&remote_api, remote_pane, "printf 'REMOTE_INITIAL_FRAME\\n'");
+
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::write(
+        config_home.join(app_dir_name()).join("config.toml"),
+        "onboarding = false\n",
+    )
+    .unwrap();
+    let catalog_dir = runtime_dir
+        .join("state")
+        .join(app_dir_name())
+        .join("client");
+    fs::create_dir_all(&catalog_dir).unwrap();
+    let profile = "0123456789abcdef0123456789abcdef";
+    fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
+        "version": 1, "selected_profile": profile,
+        "ssh": [{"id": profile, "label": "Test remote", "target": "test-only", "session": "default", "enabled": true}],
+    }).to_string()).unwrap();
+
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(base.join("home")).unwrap();
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_herdr"), bin.join("herdr")).unwrap();
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+    let ssh_commands = base.join("ssh-commands");
+    let bridge_pid = base.join("bridge-pid");
+    fs::write(bin.join("ssh"), format!(
+        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\nfor arg do last=\"$arg\"; done\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
+        quote(&base.join("home")), quote(&remote_config), quote(&remote_runtime), quote(&remote_api), quote(&ssh_commands), quote(&bridge_pid),
+    )).unwrap();
+    fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let client = spawn_client_process_with_args_and_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &["client"],
+        &[("PATH", &path)],
+    );
+    let output = spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
+    let screen_text = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(
+        wait_until(Duration::from_secs(12), Duration::from_millis(20), || {
+            screen_text().contains("REMOTE_INITIAL_FRAME")
+        }),
+        "remote must be usable before the link stalls: {}",
+        read_output(&output)
+    );
+
+    // Stall the remote end in place. The ssh child keeps running and the bridge socket stays
+    // bound, so the client never sees EOF on the link and must rely on liveness alone.
+    let pid: libc::pid_t = fs::read_to_string(&bridge_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    struct ResumeOnDrop(libc::pid_t);
+    impl Drop for ResumeOnDrop {
+        fn drop(&mut self) {
+            unsafe { libc::kill(self.0, libc::SIGCONT) };
+        }
+    }
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0);
+    let _resume = ResumeOnDrop(pid);
+
+    // Prove the stall is real before asserting recovery. The remote pane keeps running: this is
+    // driven through the remote API, not the stalled link, so the text lands in the remote
+    // server's pane buffer and must be unable to reach the client while the link is stopped.
+    let stalled = "REMOTE_WHILE_STALLED";
+    send_pane_shell_command(&remote_api, remote_pane, &format!("printf '{stalled}\\n'"));
+    assert!(
+        !wait_until(Duration::from_secs(8), Duration::from_millis(100), || {
+            screen_text().contains(stalled)
+        }),
+        "the stalled link must not deliver remote output: {}",
+        screen_text()
+    );
+
+    // Nothing resumes the stalled process, so recovery can only come from the client re-dialing
+    // on its own. Watermark the ssh command log to prove the recovery used a fresh bridge.
+    let before = fs::read_to_string(&ssh_commands).unwrap().lines().count();
+    let started = Instant::now();
+    assert!(
+        wait_until(Duration::from_secs(90), Duration::from_millis(100), || {
+            screen_text().contains(stalled)
+        }),
+        "a silently stalled saved machine must reconnect on its own: {}",
+        screen_text()
+    );
+    let elapsed = started.elapsed();
+    let after = fs::read_to_string(&ssh_commands).unwrap().lines().count();
+    assert!(
+        after > before,
+        "recovery must come from a fresh ssh dial, not the stalled bridge"
+    );
+    eprintln!(
+        "silent ssh stall: recovered after {elapsed:?} using {} fresh ssh dial(s)",
+        after - before
+    );
+    assert!(
+        !screen_text().contains("Test remote: connecting"),
+        "the reconnected machine must be presented as online: {}",
+        screen_text()
+    );
+
+    drop(client);
+    drop(remote_server);
+    cleanup_test_base(&base);
+}
+
+/// A reconnect can fail transiently: ssh works, but the remote cannot confirm a usable Herdr
+/// (mid-update, a shell hiccup, a binary that is briefly unreadable). That must not end the
+/// machine's retry loop for the rest of the client's life. Once the remote is healthy again the
+/// saved machine has to reconnect on its own, without the user restarting the client.
+#[test]
+fn saved_machine_reconnects_after_a_transient_remote_probe_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let remote_config = base.join("remote-config");
+    let remote_runtime = base.join("remote-runtime");
+    let remote_api = remote_runtime.join("herdr.sock");
+    let remote_client = remote_runtime.join("herdr-client.sock");
+    let remote_server = spawn_server(&remote_config, &remote_runtime, &remote_api, &remote_client);
+    wait_for_socket(&remote_api, Duration::from_secs(10));
+    wait_for_socket(&remote_client, Duration::from_secs(10));
+    let created = send_json_request(
+        &remote_api,
+        &serde_json::json!({
+            "id": "remote-workspace", "method": "workspace.create",
+            "params": {"cwd": base, "focus": true, "label": "remote-ready"},
+        })
+        .to_string(),
+    );
+    let remote_pane = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+    send_pane_shell_command(&remote_api, remote_pane, "printf 'REMOTE_INITIAL_FRAME\\n'");
+
+    fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
+    fs::write(
+        config_home.join(app_dir_name()).join("config.toml"),
+        "onboarding = false\n",
+    )
+    .unwrap();
+    let catalog_dir = runtime_dir
+        .join("state")
+        .join(app_dir_name())
+        .join("client");
+    fs::create_dir_all(&catalog_dir).unwrap();
+    let profile = "0123456789abcdef0123456789abcdef";
+    fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
+        "version": 1, "selected_profile": profile,
+        "ssh": [{"id": profile, "label": "Test remote", "target": "test-only", "session": "default", "enabled": true}],
+    }).to_string()).unwrap();
+
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(base.join("home")).unwrap();
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
+    // The remote Herdr binary is a wrapper that can transiently refuse to answer the readiness
+    // probe while still serving the bridge, standing in for a remote that is momentarily unable
+    // to confirm a usable Herdr.
+    let probe_fail = base.join("probe-fail");
+    fs::write(
+        bin.join("herdr"),
+        format!(
+            "#!/bin/sh\nif [ -e {} ]; then\n  case \"$*\" in *'status client'*) exit 1;; esac\nfi\nexec {} \"$@\"\n",
+            quote(&probe_fail),
+            quote(std::path::Path::new(env!("CARGO_BIN_EXE_herdr"))),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(bin.join("herdr"), fs::Permissions::from_mode(0o700)).unwrap();
+    let ssh_commands = base.join("ssh-commands");
+    let bridge_pid = base.join("bridge-pid");
+    fs::write(bin.join("ssh"), format!(
+        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\nfor arg do last=\"$arg\"; done\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
+        quote(&base.join("home")), quote(&remote_config), quote(&remote_runtime), quote(&remote_api), quote(&ssh_commands), quote(&bridge_pid),
+    )).unwrap();
+    fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let client = spawn_client_process_with_args_and_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &["client"],
+        &[("PATH", &path)],
+    );
+    let output = spawn_pty_drain(client._master.as_ref().unwrap().try_clone_reader().unwrap());
+    let screen_text = || {
+        let bytes = output
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .bytes
+            .clone();
+        terminal_screen::text(&bytes, 80, 24)
+    };
+    assert!(
+        wait_until(Duration::from_secs(12), Duration::from_millis(20), || {
+            screen_text().contains("REMOTE_INITIAL_FRAME")
+        }),
+        "remote must be usable before the probe fails: {}",
+        read_output(&output)
+    );
+
+    // The link drops, and from now on the remote cannot confirm a usable Herdr. The pane keeps
+    // running through the remote API, so this text only reaches the client after a reconnect.
+    let marker = "REMOTE_AFTER_TRANSIENT_PROBE_FAILURE";
+    let pid: libc::pid_t = fs::read_to_string(&bridge_pid)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    fs::write(&probe_fail, b"").unwrap();
+    send_pane_shell_command(&remote_api, remote_pane, &format!("printf '{marker}\\n'"));
+
+    // The client reconnects, cannot confirm the remote, and must keep trying rather than write
+    // the machine off until the client is restarted.
+    let dials = || fs::read_to_string(&ssh_commands).unwrap().lines().count();
+    thread::sleep(Duration::from_secs(15));
+    let settled = dials();
+    assert!(
+        settled > 1,
+        "the client must attempt to reconnect at least once: {settled} dial(s)"
+    );
+    thread::sleep(Duration::from_secs(15));
+    let still_trying = dials();
+    assert!(
+        still_trying > settled,
+        "a saved machine must keep retrying while the remote is unhealthy, not stop after {settled} dial(s) and stay dead until the client is restarted"
+    );
+    fs::remove_file(&probe_fail).unwrap();
+
+    assert!(
+        wait_until(Duration::from_secs(180), Duration::from_millis(100), || {
+            screen_text().contains(marker)
+        }),
+        "a saved machine must reconnect once the remote is healthy again, without a client restart: {}",
+        screen_text()
+    );
+
+    drop(client);
+    drop(remote_server);
+    cleanup_test_base(&base);
+}
+
 #[test]
 fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     let _lock = test_lock();
@@ -1881,6 +2176,7 @@ fn unavailable_restored_pane_keeps_saved_cwd_in_server() {
     );
     assert!(stopped.get("error").is_none(), "{stopped}");
     let mut spawned = spawned;
+    spawned.close_master();
     assert!(wait_until(
         Duration::from_secs(10),
         Duration::from_millis(20),

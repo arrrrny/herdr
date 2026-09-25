@@ -117,6 +117,8 @@ pub(super) struct DetectionScreenReadInput {
     pub(super) pending_idle_active: bool,
     pub(super) agent_changed: bool,
     pub(super) process_exited: bool,
+    // arrrrny/herdr#1: periodic lifecycle refresh must bypass unchanged-content skips.
+    pub(super) force_refresh: bool,
     pub(super) current_detection_content_seq: Option<u64>,
     pub(super) last_screen_scan_detection_content_seq: Option<u64>,
 }
@@ -124,15 +126,17 @@ pub(super) struct DetectionScreenReadInput {
 pub(super) fn decide_detection_screen_read(
     input: DetectionScreenReadInput,
 ) -> DetectionScreenReadDecision {
-    if should_skip_idle_screen_scan(IdleScreenScanSkipInput {
-        state: input.state,
-        agent: input.agent,
-        pending_idle_active: input.pending_idle_active,
-        agent_changed: input.agent_changed,
-        process_exited: input.process_exited,
-        current_detection_content_seq: input.current_detection_content_seq,
-        last_screen_scan_detection_content_seq: input.last_screen_scan_detection_content_seq,
-    }) {
+    if !input.force_refresh
+        && should_skip_idle_screen_scan(IdleScreenScanSkipInput {
+            state: input.state,
+            agent: input.agent,
+            pending_idle_active: input.pending_idle_active,
+            agent_changed: input.agent_changed,
+            process_exited: input.process_exited,
+            current_detection_content_seq: input.current_detection_content_seq,
+            last_screen_scan_detection_content_seq: input.last_screen_scan_detection_content_seq,
+        })
+    {
         DetectionScreenReadDecision::Skip
     } else {
         DetectionScreenReadDecision::Read
@@ -144,6 +148,7 @@ pub(super) fn should_publish_detection_update(
     next: DetectionPublishState,
     agent_changed: bool,
     process_exited: bool,
+    force_refresh: bool,
     stable_visible_signal_refresh_due: bool,
 ) -> bool {
     next.state != previous.state
@@ -152,6 +157,7 @@ pub(super) fn should_publish_detection_update(
         || next.visible_working != previous.visible_working
         || agent_changed
         || process_exited
+        || force_refresh
         || (stable_visible_signal_refresh_due && next.visible_blocker && previous.visible_blocker)
 }
 
@@ -181,6 +187,7 @@ pub(super) struct DetectionTransitionInput {
     pub(super) next_publish: DetectionPublishState,
     pub(super) agent_changed: bool,
     pub(super) process_exited: bool,
+    pub(super) force_refresh: bool,
     pub(super) stable_refresh_due: bool,
     pub(super) now: std::time::Instant,
 }
@@ -204,6 +211,7 @@ pub(super) fn decide_detection_transition(
         input.next_publish,
         input.agent_changed,
         input.process_exited,
+        input.force_refresh,
         input.stable_refresh_due,
     ) {
         return DetectionTransitionDecision::PublishNext;
@@ -233,6 +241,7 @@ pub(super) struct ScreenDetectionPublishInput {
     pub(super) last_visible_signal_refresh: Option<std::time::Instant>,
     pub(super) screen_detection: AgentDetection,
     pub(super) process_exited: bool,
+    pub(super) force_refresh: bool,
     pub(super) agent_changed: bool,
     pub(super) now: std::time::Instant,
 }
@@ -272,6 +281,7 @@ pub(super) fn decide_screen_detection_publish(
             next_publish,
             agent_changed: input.agent_changed,
             process_exited: input.process_exited,
+            force_refresh: input.force_refresh,
             stable_refresh_due,
             now: input.now,
         },
@@ -381,6 +391,7 @@ mod tests {
             last_visible_signal_refresh: None,
             screen_detection,
             process_exited: false,
+            force_refresh: false,
             agent_changed: false,
             now,
         }
@@ -393,6 +404,7 @@ mod tests {
             pending_idle_active: false,
             agent_changed: false,
             process_exited: false,
+            force_refresh: false,
             current_detection_content_seq: Some(current_seq),
             last_screen_scan_detection_content_seq: Some(10),
         }
@@ -433,6 +445,17 @@ mod tests {
         );
         input.agent_changed = false;
         input.agent = Some(Agent::Pi);
+        assert_eq!(
+            decide_detection_screen_read(input),
+            DetectionScreenReadDecision::Read
+        );
+    }
+
+    #[test]
+    fn lifecycle_force_refresh_reads_unchanged_idle_bottom_buffer() {
+        let mut input = screen_read_input(AgentState::Idle, 10);
+        input.force_refresh = true;
+
         assert_eq!(
             decide_detection_screen_read(input),
             DetectionScreenReadDecision::Read
@@ -534,12 +557,34 @@ mod tests {
                     next_publish: blocked,
                     agent_changed: false,
                     process_exited: false,
+                    force_refresh: false,
                     stable_refresh_due: false,
                     now,
                 },
                 &mut pending_idle,
             ),
             DetectionTransitionDecision::PublishNext
+        );
+    }
+
+    #[test]
+    fn lifecycle_force_refresh_publishes_unchanged_screen_state() {
+        let now = std::time::Instant::now();
+        let mut pending_idle = PendingIdleConfirmation::default();
+        let mut input =
+            screen_publish_input(AgentState::Idle, screen_detection(AgentState::Idle), now);
+        input.last_visible_idle = true;
+        input.force_refresh = true;
+
+        assert_eq!(
+            decide_screen_detection_publish(input, &mut pending_idle),
+            DetectionPublishDecision::Publish {
+                state: AgentState::Idle,
+                visible_idle: true,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: false,
+            }
         );
     }
 

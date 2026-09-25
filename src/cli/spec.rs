@@ -43,6 +43,7 @@ pub(super) fn command() -> Command {
         .subcommand(notification_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
+        .subcommand(badge_command())
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
@@ -448,6 +449,34 @@ fn agent_command() -> Command {
         )
 }
 
+fn badge_command() -> Command {
+    Command::new("badge")
+        .about("Manage custom badges shown in the sidebar header")
+        .subcommand(
+            Command::new("set")
+                .about("Set or replace a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true))
+                .arg(
+                    Arg::new("text")
+                        .long("text")
+                        .value_name("TEXT")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("color")
+                        .long("color")
+                        .value_name("COLOR")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("clear")
+                .about("Remove a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true)),
+        )
+        .subcommand(Command::new("list").about("List in-memory (IPC-set) badges"))
+}
+
 pub(super) fn agent_kind_values() -> Vec<&'static str> {
     crate::detect::Agent::ALL
         .into_iter()
@@ -622,6 +651,17 @@ fn pane_command() -> Command {
                 .after_help(
                     "The selected snapshot is searched immediately, including existing output, then polled. Without --timeout, this waits indefinitely.",
                 ),
+        )
+        .subcommand(
+            Command::new("wait")
+                .about("Wait for a pane to become idle (no foreground process)")
+                .arg(required("pane_id", "PANE_ID"))
+                .arg(
+                    flag("idle")
+                        .required(true)
+                        .help("Wait until only the shell is running, confirmed across two ~1s idle samples"),
+                )
+                .arg(option("timeout", "MS").help("Fail after this many milliseconds")),
         )
         .subcommand(
             Command::new("run")
@@ -1270,6 +1310,9 @@ mod tests {
         assert!(pane
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait-output"));
+        assert!(pane
+            .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "wait"));
     }
 
     #[test]

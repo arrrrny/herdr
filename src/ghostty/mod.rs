@@ -4066,6 +4066,55 @@ mod tests {
         }
     }
 
+    /// Derive the word under a viewport cell through the bounded API and format
+    /// it the way link activation does.
+    fn bounded_word_selection(terminal: &Terminal, x: u16, y: u32, boundaries: &[u32]) -> String {
+        let options = ffi::GhosttyTerminalSelectWordOptions {
+            size: mem::size_of::<ffi::GhosttyTerminalSelectWordOptions>(),
+            ref_: terminal.grid_ref(ghostty_viewport_point(x, y)).unwrap(),
+            boundary_codepoints: boundaries.as_ptr(),
+            boundary_codepoints_len: boundaries.len(),
+        };
+        let mut selection = ffi::GhosttySelection::default();
+        let result = unsafe {
+            ffi::ghostty_terminal_select_word_bounded(terminal.raw, &options, 64, &mut selection)
+        };
+        result.into_result().unwrap();
+        terminal
+            .format_selection(&selection, FormatterFormat::Plain, true, false)
+            .unwrap()
+    }
+
+    #[test]
+    fn link_target_selection_excludes_wide_boundary_before_token() {
+        let mut terminal = Terminal::new(10, 2, 1024).unwrap();
+        terminal.write("ab\u{3000}cd".as_bytes());
+
+        assert_eq!(bounded_word_selection(&terminal, 4, 0, &[0x3000]), "cd");
+    }
+
+    #[test]
+    fn link_target_selection_excludes_wrapped_wide_boundary_after_token() {
+        let mut terminal = Terminal::new(8, 3, 1024).unwrap();
+        terminal.write("abcd\u{3000}".as_bytes());
+        // Reflow pushes the wide boundary onto the next row and leaves a
+        // spacer head in the last column, which must not join the token.
+        terminal.resize(5, 3, 8, 16).unwrap();
+
+        assert_eq!(bounded_word_selection(&terminal, 0, 0, &[0x3000]), "abcd");
+    }
+
+    #[test]
+    fn link_target_selection_joins_wide_cells_inside_token() {
+        let mut terminal = Terminal::new(10, 2, 1024).unwrap();
+        terminal.write("a\u{ff37}b".as_bytes());
+
+        assert_eq!(
+            bounded_word_selection(&terminal, 0, 0, &[u32::from(b' ')]),
+            "a\u{ff37}b"
+        );
+    }
+
     #[test]
     fn link_target_rejects_oversized_token_without_returning_a_prefix() {
         let mut terminal = Terminal::new(100, 4, 16 * 1024 * 1024).unwrap();

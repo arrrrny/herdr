@@ -259,7 +259,7 @@ impl PaneTerminal {
         self.ghostty.scroll_reset();
     }
 
-    pub fn clear_screen(&self) -> Result<(), String> {
+    pub fn clear_screen(&self) -> Result<bool, String> {
         self.ghostty.clear_screen()
     }
 
@@ -1777,19 +1777,20 @@ impl GhosttyPaneTerminal {
         }
     }
 
-    pub fn clear_screen(&self) -> Result<(), String> {
+    pub fn clear_screen(&self) -> Result<bool, String> {
         let mut core = self
             .core
             .lock()
             .map_err(|_| "terminal lock poisoned".to_owned())?;
-        if core.terminal.clear_screen() {
+        let cleared = core.terminal.clear_screen();
+        if cleared {
             #[cfg(windows)]
             {
                 core.recent_fallback = windows_recent_fallback::Cache::default();
                 windows_recent_fallback::update(&mut core);
             }
         }
-        Ok(())
+        Ok(cleared)
     }
 
     pub fn set_scroll_offset_from_bottom(&self, lines: usize) {
@@ -2006,7 +2007,7 @@ impl GhosttyPaneTerminal {
                     core.synchronized_output_epoch,
                 )
             })
-            .unwrap_or((true, 0))
+            .unwrap_or((false, 0))
     }
 
     pub fn encode_terminal_key(
