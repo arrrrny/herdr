@@ -805,7 +805,22 @@ fn spawn_basic_detection_task(
         // Upstream tracks Codex prompt readiness for observation events; the
         // fork tracks periodic lifecycle-authority screen scans. Both are
         // needed: keep the union rather than picking one side.
-        let mut last_codex_prompt_ready = false;
+        //
+        // Force one initial revoke to synchronize with potentially stale
+        // TerminalState.codex_prompt_ready from a reused state (handoff-fd path).
+        // The task-side flag starts true, then immediately transitions to false,
+        // ensuring AppState receives a CodexPromptObserved { ready: false } event.
+        let mut last_codex_prompt_ready = true;
+        publish_codex_prompt_observation(
+            &state_events,
+            pane_id,
+            None,
+            "",
+            None,
+            false,
+            &mut last_codex_prompt_ready,
+        )
+        .await;
         let mut last_lifecycle_authority_scan_at: Option<std::time::Instant> = None;
 
         loop {
@@ -818,7 +833,7 @@ fn spawn_basic_detection_task(
                 _ = tokio::time::sleep(sleep_duration) => {}
                 _ = detect_reset.notified() => {
                     publish_codex_prompt_observation(
-                        &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                        &state_events, pane_id, None, "", None, false,
                         &mut last_codex_prompt_ready,
                     ).await;
                     agent_presence = AgentDetectionPresence::from_agent(None);
@@ -2751,7 +2766,7 @@ impl PaneRuntime {
                         _ = tokio::time::sleep(tick) => {}
                         _ = detect_reset.notified() => {
                             publish_codex_prompt_observation(
-                                &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                                &state_events, pane_id, None, "", None, false,
                                 &mut last_codex_prompt_ready,
                             ).await;
                             agent_presence = AgentDetectionPresence::from_agent(None);

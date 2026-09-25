@@ -330,6 +330,14 @@ pub(super) fn detection_update_for_publish_with_osc(
 
 pub(super) fn codex_prompt_ready(content: &str) -> bool {
     // The composer can remain visible during a turn; this is startup evidence only.
+    //
+    // Copy-drift failure mode: this detector competes with `observe_codex_prompt_ready`
+    // at src/terminal/state.rs:165 (the TerminalState::codex_prompt_ready flag).
+    // Both track Codex idle-prompt visibility independently: this function runs
+    // screen detection in the pane's async task, while the flag stores AppState-side
+    // event-driven state. They can desync when a `TerminalState` is reused across
+    // spawns (handoff-fd path) but the pane's detection task starts fresh with
+    // last_ready = false. A forced revoke on detection-task spawn keeps them aligned.
     let recent: String = content
         .lines()
         .rev()
