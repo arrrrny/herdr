@@ -395,7 +395,8 @@ impl App {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
+    // Not `#[cfg(unix)]`: the constructor is cross-platform, and gating the
+    // helper would hide it from the shell-quoting tests that run everywhere.
     fn test_app() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
