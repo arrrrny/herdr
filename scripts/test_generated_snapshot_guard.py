@@ -133,6 +133,19 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(len(violations), 1)
         self.assertEqual(violations[0].token, "arrrrny/herdr#")
 
+    def test_reported_paths_are_posix_even_on_windows(self) -> None:
+        # The reported path is compared against git's conflicted-path list and
+        # read in CI logs, and git always writes forward slashes. A
+        # Windows-native `docs\preview\...` would neither match the list nor be
+        # greppable as printed, so the separator is normalized explicitly.
+        root = self._repo({"docs/preview/website/ja/agents.mdx": "arrrrny/herdr#27"})
+        violations = scan(root, parse_generated_paths("docs/preview/\n"), FORK_IDENTITY_TOKENS)
+        self.assertEqual(
+            [v.path for v in violations], ["docs/preview/website/ja/agents.mdx"]
+        )
+        for violation in violations:
+            self.assertNotIn("\\", violation.path)
+
     def test_fork_marker_in_a_generated_file_is_reported_with_its_relative_path(self) -> None:
         root = self._repo(
             {"docs/preview/website/ja/agents.mdx": "x render_sidebar_header_badges y"}

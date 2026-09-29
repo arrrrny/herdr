@@ -92,15 +92,6 @@ class GeneratedPath:
     raw: str
     is_prefix: bool
 
-    def matches(self, path: Path, root: Path) -> bool:
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
-            return False
-        if self.is_prefix:
-            return str(relative).startswith(self.raw)
-        return str(relative) == self.raw
-
 
 @dataclass(frozen=True)
 class Violation:
@@ -180,8 +171,12 @@ def scan(root: Path, paths: Sequence[GeneratedPath], markers: Sequence[str]) -> 
             continue
         matches = [marker for marker in markers if marker in content]
         if matches:
+            # `.as_posix()` on purpose. The reported path is compared against
+            # git's conflicted-path list and read in CI logs, and git always
+            # writes forward slashes, so a Windows-native `docs\preview\...`
+            # would neither match the list nor be greppable as reported.
             violations.append(
-                Violation(str(path.relative_to(root)), max(matches, key=len))
+                Violation(path.relative_to(root).as_posix(), max(matches, key=len))
             )
     return violations
 
