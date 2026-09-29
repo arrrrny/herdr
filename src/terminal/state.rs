@@ -2033,6 +2033,19 @@ impl TerminalState {
         if !self.can_record_reported_resume(source, agent_label) {
             return false;
         }
+        // Validate at the store boundary, not only at the API edge. This state
+        // is also reached from the persistence restore path, so a snapshot
+        // written by an older or hostile writer must not be able to seed a
+        // command that the shell-quoting layer would then have to defend.
+        if let Err(err) = crate::agent_resume::validate_resume_argv(&argv) {
+            tracing::warn!(
+                source,
+                agent = agent_label,
+                %err,
+                "rejecting reported resume argv"
+            );
+            return false;
+        }
         if let Some(seq) = seq {
             let last = self
                 .hook_report_sequences
@@ -2079,6 +2092,18 @@ impl TerminalState {
     }
 
     pub fn restore_reported_resume(&mut self, resume: crate::agent_resume::ReportedAgentResume) {
+        // A persisted snapshot is untrusted input: it can predate the current
+        // argv limits or come from a hand-edited session file. Drop it rather
+        // than handing a command the restore path would have to quote safely.
+        if let Err(err) = crate::agent_resume::validate_resume_argv(&resume.argv) {
+            tracing::warn!(
+                source = %resume.source,
+                agent = %resume.agent,
+                %err,
+                "dropping persisted resume argv that no longer validates"
+            );
+            return;
+        }
         self.set_reported_resume(Some(resume));
     }
 

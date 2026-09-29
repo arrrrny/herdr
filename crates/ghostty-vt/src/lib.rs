@@ -726,9 +726,27 @@ unsafe extern "C" fn decode_png_trampoline(
     let bytes = unsafe { slice::from_raw_parts(data, data_len) };
     #[cfg(test)]
     PNG_DECODE_CALLS.with(|calls| calls.set(calls.get() + 1));
-    let Some(rgba) = decode_png_rgba(bytes) else {
-        return false;
-    };
+    // This is the only `extern "C"` callback in the crate that decodes
+    // untrusted bytes, and decoding is the one that can panic on a hostile
+    // input. Unwinding across an `extern "C"` boundary is undefined behaviour
+    // and in practice aborts the process, so contain it here the same way the
+    // clipboard-write callback does. A decode failure and a panic both mean "no
+    // image", which is exactly what `false` tells the caller.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_png_rgba(bytes)))
+        .ok()
+        .flatten()
+        .is_some_and(|rgba| publish_decoded_png(allocator, out, rgba))
+}
+
+/// Copy a decoded image into a C-owned allocation and publish it through `out`.
+///
+/// Split out of the trampoline so the `extern "C"` frame contains nothing but
+/// pointer validation and the `catch_unwind`.
+fn publish_decoded_png(
+    allocator: *const ffi::GhosttyAllocator,
+    out: *mut ffi::GhosttySysImage,
+    rgba: DecodedPng,
+) -> bool {
     let ptr = unsafe { ffi::ghostty_alloc(allocator, rgba.data.len()) };
     if ptr.is_null() {
         return false;
@@ -751,35 +769,74 @@ struct DecodedPng {
     data: Vec<u8>,
 }
 
+/// Bounds on a single image decoded from untrusted bytes.
+///
+/// These match the house limits already used for the Windows clipboard image
+/// path (`src/platform/windows/clipboard_image.rs`) so both inbound image
+/// paths agree on what counts as an unreasonable image. Without them the
+/// decoder's `output_buffer_size()` is derived straight from the IHDR header,
+/// so a few-KB PNG declaring 65535x65535 asks this process for ~16 GiB and
+/// aborts the whole server.
+const MAX_IMAGE_DIMENSION: u32 = 16_384;
+const MAX_IMAGE_PIXELS: usize = 16 * 1024 * 1024;
+/// Ceiling on the decoder's own working set for one frame, matching the png
+/// crate's own default budget.
+const MAX_PNG_DECODE_BYTES: usize = 64 * 1024 * 1024;
+
+fn validate_image_dimensions(width: u32, height: u32) -> Option<usize> {
+    if width == 0 || height == 0 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return None;
+    }
+    let pixels = usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?;
+    (pixels <= MAX_IMAGE_PIXELS).then_some(pixels)
+}
+
 fn decode_png_rgba(bytes: &[u8]) -> Option<DecodedPng> {
-    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut decoder = png::Decoder::new_with_limits(
+        std::io::Cursor::new(bytes),
+        png::Limits {
+            bytes: MAX_PNG_DECODE_BYTES,
+        },
+    );
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()];
+    // Validate before touching `output_buffer_size()`: that length comes from
+    // the untrusted header, and it is what the allocation below is sized from.
+    let pixels = validate_image_dimensions(reader.info().width, reader.info().height)?;
+    let buffer_size = reader.output_buffer_size();
+    if buffer_size == 0 || buffer_size > pixels.saturating_mul(4) {
+        return None;
+    }
+    let mut buf = vec![0; buffer_size];
     let info = reader.next_frame(&mut buf).ok()?;
     let frame = &buf[..info.buffer_size()];
     if info.bit_depth != png::BitDepth::Eight {
         return None;
     }
+    // The expanded RGBA output is four bytes per pixel; `pixels` is already
+    // bounded, so this only has to stay consistent with the pre-allocation check.
+    let _ = validate_image_dimensions(info.width, info.height)?;
 
     let data = match info.color_type {
         png::ColorType::Rgba => frame.to_vec(),
         png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity((info.width as usize) * (info.height as usize) * 4);
+            let mut out = Vec::with_capacity(pixels * 4);
             for rgb in frame.chunks_exact(3) {
                 out.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
             out
         }
         png::ColorType::Grayscale => {
-            let mut out = Vec::with_capacity((info.width as usize) * (info.height as usize) * 4);
+            let mut out = Vec::with_capacity(pixels * 4);
             for gray in frame {
                 out.extend_from_slice(&[*gray, *gray, *gray, 255]);
             }
             out
         }
         png::ColorType::GrayscaleAlpha => {
-            let mut out = Vec::with_capacity((info.width as usize) * (info.height as usize) * 4);
+            let mut out = Vec::with_capacity(pixels * 4);
             for ga in frame.chunks_exact(2) {
                 out.extend_from_slice(&[ga[0], ga[0], ga[0], ga[1]]);
             }

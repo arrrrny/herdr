@@ -1292,10 +1292,49 @@ fn parse_pane_wait_args(args: &[String]) -> Result<PaneWaitArgs, String> {
     })
 }
 
+/// Split `args` at the `--` that introduces the resume command.
+///
+/// The separator must not be a flag *value*. Scanning for the first bare `--`
+/// misparses `pane report-agent p --message -- --seq 2`: it treats the
+/// `--message` value as the separator, so `--message` loses its value and
+/// `--seq 2` is silently captured as the resume command. Walking the
+/// value-taking flags keeps a literal `--` usable as a value while still
+/// honouring `--` as the end-of-options marker.
+fn split_resume_argv_at<'a>(
+    args: &'a [String],
+    value_flags: &[&str],
+) -> (&'a [String], Option<Vec<String>>) {
+    let mut expects_value = false;
+    for (index, arg) in args.iter().enumerate() {
+        if expects_value {
+            expects_value = false;
+            continue;
+        }
+        if arg == "--" {
+            return (&args[..index], Some(args[index + 1..].to_vec()));
+        }
+        // `--flag=value` carries its own value, so it never consumes the next
+        // token; only the bare `--flag value` form does.
+        expects_value = value_flags.contains(&arg.as_str());
+    }
+    (args, None)
+}
+
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
     const USAGE: &str = "usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [-- <resume-command...>]";
 
-    let (args, resume_argv) = split_resume_argv(args);
+    let (args, resume_argv) = split_resume_argv_at(
+        args,
+        &[
+            "--source",
+            "--agent",
+            "--state",
+            "--message",
+            "--seq",
+            "--agent-session-id",
+            "--agent-session-path",
+        ],
+    );
     let args = super::expand_equals_args(
         args,
         &[
@@ -1424,17 +1463,20 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
     }))
 }
 
-fn split_resume_argv(args: &[String]) -> (&[String], Option<Vec<String>>) {
-    match args.iter().position(|arg| arg == "--") {
-        Some(separator) => (&args[..separator], Some(args[separator + 1..].to_vec())),
-        None => (args, None),
-    }
-}
-
 fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
     const USAGE: &str = "usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE] [-- <resume-command...>]";
 
-    let (args, resume_argv) = split_resume_argv(args);
+    let (args, resume_argv) = split_resume_argv_at(
+        args,
+        &[
+            "--source",
+            "--agent",
+            "--seq",
+            "--agent-session-id",
+            "--agent-session-path",
+            "--session-start-source",
+        ],
+    );
     let args = super::expand_equals_args(
         args,
         &[
@@ -1844,6 +1886,76 @@ fn print_pane_help() {
 
 #[cfg(test)]
 mod tests {
+    const REPORT_AGENT_VALUE_FLAGS: &[&str] = &[
+        "--source",
+        "--agent",
+        "--state",
+        "--message",
+        "--seq",
+        "--agent-session-id",
+        "--agent-session-path",
+    ];
+
+    fn argv(raw: &[&str]) -> Vec<String> {
+        raw.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn resume_separator_splits_flags_from_resume_command() {
+        let input = argv(&["p1", "--source", "s", "--", "claude", "--resume", "abc"]);
+        let (head, resume) = split_resume_argv_at(&input, REPORT_AGENT_VALUE_FLAGS);
+        assert_eq!(head, argv(&["p1", "--source", "s"]).as_slice());
+        assert_eq!(resume.unwrap(), argv(&["claude", "--resume", "abc"]));
+    }
+
+    #[test]
+    fn a_literal_double_dash_flag_value_is_not_the_separator() {
+        // Regression: taking the first bare `--` turned this into "no message
+        // value" plus a resume command of `--seq 2`.
+        let input = argv(&[
+            "p1",
+            "--message",
+            "--",
+            "--seq",
+            "2",
+            "--",
+            "claude",
+            "--resume",
+        ]);
+        let (head, resume) = split_resume_argv_at(&input, REPORT_AGENT_VALUE_FLAGS);
+        assert_eq!(
+            head,
+            argv(&["p1", "--message", "--", "--seq", "2"]).as_slice()
+        );
+        assert_eq!(resume.unwrap(), argv(&["claude", "--resume"]));
+    }
+
+    #[test]
+    fn equals_form_flag_is_not_mistaken_for_a_valueless_flag() {
+        // `--source=s` carries its own value, so a following `--` really is the
+        // separator.
+        let input = argv(&["p1", "--source=s", "--", "claude"]);
+        let (head, resume) = split_resume_argv_at(&input, REPORT_AGENT_VALUE_FLAGS);
+        assert_eq!(head, argv(&["p1", "--source=s"]).as_slice());
+        assert_eq!(resume.unwrap(), argv(&["claude"]));
+    }
+
+    #[test]
+    fn no_separator_leaves_resume_command_absent() {
+        let input = argv(&["p1", "--source", "s", "--agent", "claude"]);
+        let (head, resume) = split_resume_argv_at(&input, REPORT_AGENT_VALUE_FLAGS);
+        assert_eq!(head, input.as_slice());
+        assert_eq!(resume, None);
+    }
+
+    #[test]
+    fn trailing_separator_yields_an_empty_resume_command() {
+        let input = argv(&["p1", "--"]);
+        let (head, resume) = split_resume_argv_at(&input, REPORT_AGENT_VALUE_FLAGS);
+        assert_eq!(head, argv(&["p1"]).as_slice());
+        assert_eq!(resume.unwrap(), Vec::<String>::new());
+    }
+
     use super::*;
 
     fn args(values: &[&str]) -> Vec<String> {

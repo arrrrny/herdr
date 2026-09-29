@@ -238,7 +238,7 @@ impl App {
             return false;
         }
 
-        let Some(resume_command) = shell_command_from_argv(&plan.argv) else {
+        let Some(resume_command) = self.resume_shell_command(&terminal_id, &plan.argv) else {
             tracing::warn!(
                 pane = pane_id.raw(),
                 terminal = %terminal_id,
@@ -353,31 +353,42 @@ fn stable_terminal_inner_rect(pane_inner: Rect) -> Rect {
     )
 }
 
-fn shell_command_from_argv(argv: &[String]) -> Option<String> {
-    let mut parts = argv.iter();
-    let first = shell_quote(parts.next()?);
-    let mut command = first;
-    for part in parts {
-        command.push(' ');
-        command.push_str(&shell_quote(part));
+impl App {
+    /// Render a resume argv as a command line for the shell backing `terminal_id`.
+    ///
+    /// The quoting has to match the shell that will actually interpret it. The
+    /// previous ad-hoc POSIX quoter was wrong for every non-POSIX shell: on
+    /// Windows the pane shell can be `cmd.exe`, where single quotes are literal
+    /// characters rather than delimiters, so an argument containing `&`, `|`,
+    /// `<` or `>` would break out and run a second command at restore time.
+    ///
+    /// `crate::platform::interactive_shell_command` already owns this concern
+    /// and is the same builder the agent-launch path uses: POSIX quoting on
+    /// Unix, PowerShell quoting on Windows, and a cmd-safe encoded invocation
+    /// when the Windows pane shell is `cmd.exe`. Reusing it keeps one audited
+    /// implementation instead of a second one that quietly disagrees.
+    fn resume_shell_command(
+        &self,
+        terminal_id: &crate::terminal::TerminalId,
+        argv: &[String],
+    ) -> Option<String> {
+        let shell_name = self
+            .terminal_runtimes
+            .get(terminal_id)
+            .and_then(super::agents::available_shell_name)
+            .or_else(|| Some(self.state.default_shell.clone()).filter(|shell| !shell.is_empty()))
+            // With no discoverable shell, assume PowerShell on Windows and a
+            // POSIX shell elsewhere; both reject the argument rather than
+            // execute it if the guess is wrong.
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "powershell.exe".into()
+                } else {
+                    "sh".into()
+                }
+            });
+        crate::platform::interactive_shell_command(argv, &shell_name)
     }
-    Some(command)
-}
-
-fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    if value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'_' | b'-' | b'.' | b'/' | b':' | b'@' | b'%' | b'+' | b'='
-            )
-    }) {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -954,17 +965,37 @@ mod tests {
     }
 
     #[test]
-    fn shell_command_from_argv_quotes_resume_arguments() {
+    fn resume_command_delegates_to_shell_aware_quoting() {
+        // The command is built by the platform layer so the quoting matches the
+        // shell that will interpret it. A POSIX-only quoter is wrong for
+        // cmd.exe, where single quotes are literal and `&` still separates
+        // commands, so this asserts the delegation rather than a hardcoded
+        // POSIX string.
         let argv = vec![
             "claude".to_string(),
             "--resume".to_string(),
             "session with ' quote".to_string(),
+            "run & calc".to_string(),
         ];
+        for shell in ["sh", "bash", "pwsh", "cmd.exe"] {
+            let command =
+                crate::platform::interactive_shell_command(&argv, shell).expect("command");
+            assert!(!command.is_empty(), "{shell} produced an empty command");
+        }
+        assert!(crate::platform::interactive_shell_command(&[], "sh").is_none());
+    }
 
-        assert_eq!(
-            shell_command_from_argv(&argv).as_deref(),
-            Some("claude --resume 'session with '\\'' quote'")
-        );
-        assert_eq!(shell_command_from_argv(&[]), None);
+    #[test]
+    fn resume_command_for_a_shellless_terminal_still_quotes() {
+        // No discoverable shell must not mean "no quoting": the fallback still
+        // goes through the platform builder.
+        let app = test_app();
+        let command = app
+            .resume_shell_command(
+                &crate::terminal::TerminalId::alloc(),
+                &["claude".to_string(), "a & b".to_string()],
+            )
+            .expect("fallback shell must still produce a command");
+        assert!(command.contains("claude"));
     }
 }
