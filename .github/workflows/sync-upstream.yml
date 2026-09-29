@@ -1,0 +1,236 @@
+# Sync upstream (herdrdev/herdr) changes into master daily.
+#
+# Keeps the fork's master branch up to date with upstream while
+# preserving fork-owned features. The contract with AGENTS.md's
+# "Fork Upstream Sync Policy" is:
+#
+#   1. Never auto-resolve conflicts in favor of upstream. On any
+#      conflict, abort, open a `sync`-labeled GitHub issue listing
+#      the conflicted files, and FAIL the job. A human resolves
+#      conflicts on a `sync/fork-sync-resolution` branch and merges
+#      manually.
+#   2. After a clean merge, verify every file in
+#      `.github/FORK_OWNED_FILES` still exists and still contains
+#      its survival marker. If a clean merge silently dropped a
+#      fork-owned file, fail the job and open an issue.
+
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync upstream to master
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/herdrdev/herdr.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream master
+
+      - name: Switch to master
+        run: git checkout master || git checkout -b master
+
+      - name: Check if already up to date
+        id: check
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/master)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "local=$LOCAL" >> "$GITHUB_OUTPUT"
+            echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge upstream changes (no auto-resolve)
+        id: merge
+        if: steps.check.outputs.up_to_date == 'false'
+        run: |
+          set +e
+          git merge upstream/master --no-edit \
+            -m "chore: sync upstream $(date +%Y-%m-%d)"
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "merge_state=clean" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge_state=conflicts" >> "$GITHUB_OUTPUT"
+            CONFLICTS=$(git diff --name-only --diff-filter=U | sort)
+            echo "conflicts<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$CONFLICTS" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            git merge --abort
+          fi
+
+      - name: Open sync-conflict issue
+        if: steps.merge.outputs.merge_state == 'conflicts'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conflicts = `${{ steps.merge.outputs.conflicts }}`.trim().split('\n').filter(Boolean);
+            const local = '${{ steps.check.outputs.local }}';
+            const upstream = '${{ steps.check.outputs.upstream }}';
+            const body = [
+              'The daily upstream sync encountered **' + conflicts.length + '** merge conflict(s) and aborted per the fork-upstream-sync policy (AGENTS.md).',
+              '',
+              'Auto-resolving in favor of upstream is **not** permitted — these conflicts contain fork-owned features that must be preserved.',
+              '',
+              '## Conflicted files',
+              '',
+              ...conflicts.map((f) => '- `' + f + '`'),
+              '',
+              '## Resolution procedure',
+              '',
+              '1. Create a branch: `git switch -c sync/fork-sync-resolution upstream/master`',
+              '2. Merge master into it: `git merge master --no-ff`',
+              '3. Resolve each conflict, preserving fork-owned code (macOS notification click handler, login-shell PATH, badge CLI verb, agent lifecycle hooks, ziki detection, etc.).',
+              '4. Run `just check` and the fork-owned test suites (see `.github/FORK_OWNED_FILES` for the markers to grep for).',
+              '5. Open a PR titled `chore: sync upstream $(date +%Y-%m-%d)` and reference this issue.',
+              '6. After the PR merges, the next scheduled sync will be a no-op.',
+              '',
+              '## Commit refs',
+              '',
+              '- local master: `' + local + '`',
+              '- upstream/master: `' + upstream + '`',
+              '',
+              'cc: the arrrrny fork maintainer.',
+            ].join('\n');
+
+            // Dedup: comment on existing open conflict issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'sync', per_page: 5
+            });
+            const existing = issues.data.find(i => i.title.includes('merge conflicts'));
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number,
+                body: '🔄 New sync conflict detected on ' + new Date().toISOString().split('T')[0] + '.\n\n' + body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: 'sync: upstream merge conflicts require manual resolution',
+                labels: ['sync'], body,
+              });
+            }
+
+      - name: Fail job on conflict
+        if: steps.merge.outputs.merge_state == 'conflicts'
+        run: |
+          echo "::error::merge conflicts detected; sync aborted. See the sync-labeled issue for resolution steps."
+          exit 1
+
+      - name: Verify fork-owned file markers (secondary guardrail)
+        id: verify
+        if: steps.merge.outputs.merge_state == 'clean'
+        continue-on-error: true
+        run: python3 scripts/fork_owned_guard.py
+
+      - name: Open fork-owned-marker issue
+        if: steps.verify.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const missing = `${{ steps.verify.outputs.missing_files }}`.trim();
+            const markerMissing = `${{ steps.verify.outputs.marker_missing }}`.trim();
+            const body = [
+              'The daily upstream sync completed a clean merge but the fork-owned-file guardrail (`.github/FORK_OWNED_FILES`) detected that upstream silently dropped a fork-owned feature.',
+              '',
+              'Per AGENTS.md, this means a clean merge overwrote fork code. Restore manually on a `sync/fork-marker-restoration` branch and re-merge.',
+              '',
+              '## Missing files',
+              '',
+              missing ? missing.split('\n').map((f) => '- `' + f + '`').join('\n') : '_none_',
+              '',
+              '## Files whose fork markers are gone',
+              '',
+              markerMissing ? markerMissing.split('\n').map((f) => '- `' + f + '`').join('\n') : '_none_',
+              '',
+              'The `FORK_OWNED_FILES` list is at `.github/FORK_OWNED_FILES`. Update it if a fork-owned feature has been intentionally retired.',
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: 'sync: fork-owned markers silently dropped by upstream merge',
+              labels: ['sync'], body,
+            });
+
+      - name: Fail job on guardrail miss
+        if: steps.verify.outcome == 'failure'
+        run: |
+          echo "::error::fork-owned-file guardrail failed; see the sync-labeled issue."
+          exit 1
+
+      - name: Push
+        if: steps.merge.outputs.merge_state == 'clean' && steps.verify.outcome == 'success'
+        run: git push origin master
+
+      - name: Open failure issue (catch-all)
+        if: failure() && steps.verify.outcome != 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              'The daily upstream sync failed unexpectedly.',
+              '',
+              'This is a **catch-all** — the specific failure path (conflict, guardrail, push rejection, or other) did not open its own issue.',
+              '',
+              '## Run',
+              '',
+              runUrl,
+              '',
+              '## What to check',
+              '',
+              '1. Open the run log above and find the failing step.',
+              '2. If it is a **push rejection** (workflow file changes), the token needs `workflows` permission or the workflow file needs updating.',
+              '3. If it is a **merge conflict**, a separate conflict issue should exist — check `sync` label.',
+              '4. If it is **something else**, resolve manually.',
+              '',
+              'cc: the fork maintainer.',
+            ].join('\n');
+
+            // Dedup: comment on existing open catch-all
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'sync', per_page: 10
+            });
+            const existing = issues.data.find(i =>
+              i.title.includes('failed') && !i.title.includes('conflicts') && !i.title.includes('markers')
+            );
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number,
+                body: '🔄 Another sync failure on ' + new Date().toISOString().split('T')[0] + '.\n\n' + body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: 'sync: upstream sync failed (' + new Date().toISOString().split('T')[0] + ')',
+                labels: ['sync'], body,
+              });
+            }

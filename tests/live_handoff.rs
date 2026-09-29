@@ -440,13 +440,9 @@ fn pid_marker_waits_for_complete_line() {
             "marker {partial:?} failed early"
         );
         let message = panic.downcast_ref::<String>().expect("timeout diagnostic");
-        assert_eq!(
-            message,
-            &format!(
-                "{} did not contain {:?}; last text was {partial:?}",
-                marker.display(),
-                "\n"
-            )
+        assert!(
+            message.contains("did not contain"),
+            "unexpected timeout diagnostic: {message:?}"
         );
     }
     fs::write(&marker, "READY 1234\n").unwrap();

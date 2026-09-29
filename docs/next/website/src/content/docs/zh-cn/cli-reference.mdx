@@ -81,6 +81,22 @@ herdr --machine "Build machine" worktree create --cwd /srv/project --branch revi
 
 远程命令不会继承调用方的本地窗格 ID，请显式指定远程 ID。`--current` 不能引用本地窗格。远程 worktree 路径必须为绝对路径、`~` 或以 `~/` 开头（由服务器展开）；插件 link 路径必须为绝对路径。每次只操作一台机器，不包含合并列表或通过其他 TUI 连接转发的功能。
 
+## 徽章
+
+```bash
+herdr badge set --key KEY --text TEXT --color COLOR
+herdr badge clear --key KEY
+herdr badge list
+```
+
+`herdr badge` 将二进制内置的自定义徽章系统暴露为 CLI 动词。徽章是应用全局的：每个徽章都有键，设置相同的键会替换之前的徽章，多个不同的键会并列显示。它们渲染在侧边栏标题中。
+
+- `herdr badge set --key KEY --text TEXT --color COLOR` 设置或替换 `KEY` 的徽章。`--text` 是侧边栏中显示的标签；`--color` 是任意 Herdr 颜色字符串（hex、`rgb(...)`、命名颜色或 `reset`）。
+- `herdr badge clear --key KEY` 移除 `KEY` 的徽章。清除不存在的键仍会成功，属于无操作。
+- `herdr badge list` 以 JSON 打印内存中（通过 IPC 设置）的徽章。不包含来自 `run/badge.json` 的文件徽章；文件徽章会在每次渲染时重新读取。
+
+每个命令都会打印来自 socket API 的原始 JSON 响应（与集成使用的 `badge.set`、`badge.clear` 和 `badge.list` 方法相同）。
+
 ## Shell 补全
 
 ```bash

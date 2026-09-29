@@ -772,9 +772,25 @@ GHOSTTY_API GhosttyResult ghostty_terminal_select_word(
 /**
  * Derive a word selection with a shared forward/backward cell inspection limit.
  *
- * Like ghostty_terminal_select_word(), but returns GHOSTTY_NO_VALUE if
- * max_cells is zero or the search exhausts that budget. No partial selection
- * is returned. The existing options structure and unbounded API are unchanged.
+ * The returned selection is not installed as the terminal's current
+ * selection. It is a snapshot with the same lifetime rules as GhosttySelection.
+ *
+ * Like ghostty_terminal_select_word(), with one difference and one addition.
+ * Unlike that function, wide-character spacer cells are folded into the word.
+ * On top of that, max_cells counts the options->ref cell itself and at most
+ * max_cells cells are inspected across both directions, so a budget of 1
+ * always yields GHOSTTY_NO_VALUE and a budget of exactly the word's cell count
+ * is required. The search never returns a partial selection: exhausting the
+ * budget yields GHOSTTY_NO_VALUE.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param options Word-selection options
+ * @param max_cells Shared forward/backward cell inspection limit
+ * @param[out] out_selection On success, receives the derived selection
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if the valid ref has
+ *         no selectable word content or the cell budget is exhausted, or
+ *         GHOSTTY_INVALID_VALUE if the terminal, options, ref, codepoint
+ *         pointer, or output pointer are invalid.
  *
  * @ingroup selection
  */

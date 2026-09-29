@@ -225,6 +225,12 @@ pub fn process_exists(_pid: u32) -> bool {
     false
 }
 
+/// Unsupported platform stub. `herdr server stop` falls back to the
+/// "server is not running" error message on platforms without Unix sockets.
+pub fn find_unix_socket_owner_pid(_socket_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn write_clipboard(_bytes: &[u8]) -> bool {
     false
@@ -249,6 +255,10 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 }
 
 /// Unsupported platform stub.
-pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
+pub fn show_desktop_notification(
+    _title: &str,
+    _body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     Ok(false)
 }

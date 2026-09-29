@@ -13,6 +13,10 @@ _SOURCE = "herdr:hermes"
 _AGENT = "hermes"
 _INTERACTIVE_PLATFORMS = {"cli", "tui", "desktop", "acp"}
 
+# Deduplicates identical session reports so pre_llm_call does not spam Herdr
+# with the same session id on every prompt. Keyed by "platform:start_source".
+_LAST_REPORTED: dict[str, str] = {}
+
 
 def _pane_id() -> str | None:
     if os.environ.get("HERDR_ENV") != "1":
@@ -55,6 +59,10 @@ def _report_session(start_source: str, **kwargs) -> None:
     session_id = kwargs.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         return
+    key = f"{kwargs['platform']}:{start_source}"
+    if _LAST_REPORTED.get(key) == session_id:
+        return
+    _LAST_REPORTED[key] = session_id
     _send_session(session_id, start_source)
 
 
@@ -67,8 +75,7 @@ def _session_reset(**kwargs) -> None:
 
 
 def _session_observed(**kwargs) -> None:
-    if kwargs.get("platform") == "cli":
-        _report_session("resume", **kwargs)
+    _report_session("resume", **kwargs)
 
 
 def register(ctx):

@@ -1110,11 +1110,10 @@ fn worktree_action_errors_expire_without_more_input() {
 
     // A repeated identical message must start a fresh lifetime instead of
     // inheriting the earlier deadline.
-    let before_repeat = std::time::Instant::now();
     state.set_endpoint_error(message);
     assert!(
-        state.endpoint_error_deadline.expect("deadline")
-            >= before_repeat + std::time::Duration::from_secs(5)
+        state.endpoint_error_deadline.expect("deadline") > deadline,
+        "a repeated error must restart its lifetime"
     );
 }
 

@@ -81,6 +81,22 @@ JSON API を非対話 SSH で転送します。API の内容を SSH のシェル
 
 呼び出し元のローカルペイン ID は継承しません。リモート ID を明示してください。`--current` でローカルペインを指定することはできません。リモート worktree パスには絶対パス、`~`、または `~/` で始まるパスを指定します（サーバー側で展開）。プラグインの link パスは絶対パスが必要です。対象は 1 台ずつで、一覧の統合や別の TUI の接続を使った転送は含みません。
 
+## バッジ
+
+```bash
+herdr badge set --key KEY --text TEXT --color COLOR
+herdr badge clear --key KEY
+herdr badge list
+```
+
+`herdr badge` は、バイナリに組み込まれたカスタムバッジシステムを CLI 動詞として公開します。バッジはアプリ全体で共有されます。キー付きで、同じキーを設定すると前のバッジが置き換わり、異なるキーは複数並んで表示されます。サイドバーのヘッダーに描画されます。
+
+- `herdr badge set --key KEY --text TEXT --color COLOR` は `KEY` のバッジを設定または置き換えます。`--text` はサイドバーに表示されるラベル、`--color` は Herdr の色文字列（hex、`rgb(...)`、名前付きカラー、`reset`）です。
+- `herdr badge clear --key KEY` は `KEY` のバッジを削除します。存在しないキーの削除は成功として返される no-op です。
+- `herdr badge list` はメモリ内（IPC 設定済み）のバッジを JSON で表示します。`run/badge.json` から読み込まれるファイル由来のバッジは含まれません。ファイル由来のバッジは描画のたびに新しく読み込まれます。
+
+各コマンドはソケット API からの生の JSON 応答を表示します（統合機能が使うのと同じ `badge.set`、`badge.clear`、`badge.list` メソッドです）。
+
 ## シェル補完
 
 ```bash

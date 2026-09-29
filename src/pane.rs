@@ -400,6 +400,12 @@ const PROCESS_ACQUISITION_FAST_WINDOW: std::time::Duration = std::time::Duration
 const PROCESS_ACQUISITION_FAST_RECHECK: std::time::Duration = std::time::Duration::from_millis(500);
 const PROCESS_ACQUISITION_SLOW_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
 const PROCESS_ACQUISITION_IDLE_RESET: std::time::Duration = std::time::Duration::from_secs(2);
+/// Interval at which a screen scan is allowed through even while a full
+/// lifecycle-hook authority is active, so the screen-derived `fallback_state`
+/// stays fresh and can take over once the authority goes stale (see
+/// FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in terminal/state.rs). Issue arrrrny/herdr#1.
+const SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 struct AgentDetectionPresence {
@@ -826,8 +832,28 @@ fn spawn_basic_detection_task(
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
-        let mut last_codex_prompt_ready = false;
+        // Upstream tracks Codex prompt readiness for observation events and a
+        // self-reported shell check; the fork additionally forces one initial
+        // revoke and tracks periodic lifecycle-authority screen scans. All
+        // three are needed: keep the union rather than picking one side.
+        //
+        // Force one initial revoke to synchronize with potentially stale
+        // TerminalState.codex_prompt_ready from a reused state (handoff-fd path).
+        // The task-side flag starts true, then immediately transitions to false,
+        // ensuring AppState receives a CodexPromptObserved { ready: false } event.
+        let mut last_codex_prompt_ready = true;
+        publish_codex_prompt_observation(
+            &state_events,
+            pane_id,
+            None,
+            "",
+            None,
+            false,
+            &mut last_codex_prompt_ready,
+        )
+        .await;
         let mut last_self_reported_shell_check = None;
+        let mut last_lifecycle_authority_scan_at: Option<std::time::Instant> = None;
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -839,7 +865,7 @@ fn spawn_basic_detection_task(
                 _ = tokio::time::sleep(sleep_duration) => {}
                 _ = detect_reset.notified() => {
                     publish_codex_prompt_observation(
-                        &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                        &state_events, pane_id, None, "", None, false,
                         &mut last_codex_prompt_ready,
                     ).await;
                     agent_presence = AgentDetectionPresence::from_agent(None);
@@ -989,9 +1015,25 @@ fn spawn_basic_detection_task(
                 && agent.is_some()
                 && !foreground_shell_exit_reported;
 
+            let mut lifecycle_refresh_due = false;
             if lifecycle_authority_active && !process_exited {
-                pending_idle.clear();
-                continue;
+                // Periodically let a screen scan through even while lifecycle-hook
+                // authority is active, so the screen-derived fallback_state stays
+                // fresh and can take over once the hook goes stale (see
+                // FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in terminal/state.rs).
+                // Issue arrrrny/herdr#1.
+                let screen_scan_due = last_lifecycle_authority_scan_at
+                    .map(|last| {
+                        now.duration_since(last) >= SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL
+                    })
+                    .unwrap_or(true);
+                if !screen_scan_due {
+                    pending_idle.clear();
+                    continue;
+                }
+                last_lifecycle_authority_scan_at = Some(now);
+                lifecycle_refresh_due = true;
+                // fall through: run the screen scan this tick.
             }
 
             if let Some(until) = agent_startup_grace_until {
@@ -1021,6 +1063,7 @@ fn spawn_basic_detection_task(
                 pending_idle_active: pending_idle.active(),
                 agent_changed,
                 process_exited,
+                force_refresh: lifecycle_refresh_due,
                 current_detection_content_seq,
                 last_screen_scan_detection_content_seq,
             }) {
@@ -1073,6 +1116,7 @@ fn spawn_basic_detection_task(
                     last_visible_working,
                     last_visible_signal_refresh,
                     process_exited,
+                    force_refresh: lifecycle_refresh_due,
                     agent_changed,
                     now,
                 },
@@ -2743,8 +2787,13 @@ impl PaneRuntime {
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
+                // Upstream tracks Codex prompt readiness for observation events
+                // and a self-reported shell check; the fork additionally tracks
+                // periodic lifecycle-authority screen scans. All three are
+                // needed: keep the union rather than picking one side.
                 let mut last_codex_prompt_ready = false;
                 let mut last_self_reported_shell_check = None;
+                let mut last_lifecycle_authority_scan_at: Option<Instant> = None;
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2766,7 +2815,7 @@ impl PaneRuntime {
                         _ = tokio::time::sleep(tick) => {}
                         _ = detect_reset.notified() => {
                             publish_codex_prompt_observation(
-                                &state_events, pane_id, Some(Agent::Codex), "", None, false,
+                                &state_events, pane_id, None, "", None, false,
                                 &mut last_codex_prompt_ready,
                             ).await;
                             agent_presence = AgentDetectionPresence::from_agent(None);
@@ -2986,9 +3035,26 @@ impl PaneRuntime {
                         && agent.is_some()
                         && !foreground_shell_exit_reported;
 
+                    let mut lifecycle_refresh_due = false;
                     if lifecycle_authority_active && !process_exited {
-                        pending_idle.clear();
-                        continue;
+                        // Periodically let a screen scan through even while
+                        // lifecycle-hook authority is active, so the screen-derived
+                        // fallback_state stays fresh and can take over once the hook
+                        // goes stale (see FULL_LIFECYCLE_HOOK_STALE_THRESHOLD in
+                        // terminal/state.rs). Issue arrrrny/herdr#1.
+                        let screen_scan_due = last_lifecycle_authority_scan_at
+                            .map(|last| {
+                                now.duration_since(last)
+                                    >= SCREEN_SCAN_UNDER_LIFECYCLE_AUTHORITY_INTERVAL
+                            })
+                            .unwrap_or(true);
+                        if !screen_scan_due {
+                            pending_idle.clear();
+                            continue;
+                        }
+                        last_lifecycle_authority_scan_at = Some(now);
+                        lifecycle_refresh_due = true;
+                        // fall through: run the screen scan this tick.
                     }
 
                     if let Some(until) = agent_startup_grace_until {
@@ -3018,6 +3084,7 @@ impl PaneRuntime {
                         pending_idle_active: pending_idle.active(),
                         agent_changed,
                         process_exited,
+                        force_refresh: lifecycle_refresh_due,
                         current_detection_content_seq,
                         last_screen_scan_detection_content_seq,
                     }) {
@@ -3070,6 +3137,7 @@ impl PaneRuntime {
                             last_visible_working,
                             last_visible_signal_refresh,
                             process_exited,
+                            force_refresh: lifecycle_refresh_due,
                             agent_changed,
                             now,
                         },
@@ -3231,18 +3299,21 @@ impl PaneRuntime {
         self.compression.wake();
     }
 
-    pub fn clear_screen(&self) -> Result<(), String> {
+    pub fn clear_screen(&self) -> Result<bool, String> {
         let guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        self.content_seq.fetch_add(1, Ordering::AcqRel);
-        let result = self.terminal.clear_screen();
-        self.content_seq.fetch_add(1, Ordering::Release);
+        let cleared = self.terminal.clear_screen()?;
+        if cleared {
+            // Bracket the cleared frame so readers observe a new content revision.
+            self.content_seq.fetch_add(1, Ordering::AcqRel);
+            self.content_seq.fetch_add(1, Ordering::Release);
+            self.compression.wake();
+            mark_detection_content_changed(&self.detection_content_seq);
+        }
         drop(guard);
-        self.compression.wake();
-        mark_detection_content_changed(&self.detection_content_seq);
-        result
+        Ok(cleared)
     }
 
     /// Reset scroll to live view (offset = 0).
