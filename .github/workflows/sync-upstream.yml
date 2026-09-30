@@ -9,6 +9,13 @@
 #      the conflicted files, and FAIL the job. A human resolves
 #      conflicts on a `sync/fork-sync-resolution` branch and merges
 #      manually.
+#   1b. One audited exception: when EVERY conflict is confined to
+#      `.github/GENERATED_UPSTREAM_FILES` — trees upstream's own CI
+#      regenerates and commits, which neither side hand-authors — the
+#      sync clears them to upstream's copy itself. This is gated on
+#      `scripts/generated_snapshot_guard.py` proving those files hold
+#      no fork-owned content, an invariant enforced in ordinary PR CI.
+#      A single real conflict sends the whole merge back to path 1.
 #   2. After a clean merge, verify every file in
 #      `.github/FORK_OWNED_FILES` still exists and still contains
 #      its survival marker. If a clean merge silently dropped a
@@ -81,7 +88,33 @@ jobs:
             echo "conflicts<<EOF" >> "$GITHUB_OUTPUT"
             echo "$CONFLICTS" >> "$GITHUB_OUTPUT"
             echo "EOF" >> "$GITHUB_OUTPUT"
-            git merge --abort
+          fi
+
+      # `.github/GENERATED_UPSTREAM_FILES` holds the trees upstream's own CI
+      # regenerates and commits. Neither side hand-authors them, so a conflict
+      # there carries no design decision and upstream's fresh copy is the only
+      # correct resolution. Historically these files caused most of the manual
+      # sync resolutions (14 of 19 in arrrrny/herdr#67 alone), blocking the
+      # daily sync for a snapshot Preview CI was going to overwrite anyway.
+      #
+      # This is not a blanket `-X theirs`. `scripts/sync_resolve_generated.py`
+      # applies it only when EVERY conflict is a generated file, and only after
+      # `scripts/generated_snapshot_guard.py` proves those files hold no
+      # fork-owned marker. Any real conflict, or any fork marker found, aborts
+      # the merge for manual resolution exactly as before.
+      - name: Clear conflicts confined to upstream-generated files
+        id: generated
+        if: steps.merge.outputs.merge_state == 'conflicts'
+        run: |
+          set +e
+          python3 scripts/sync_resolve_generated.py
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "merge_state=clean" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge_state=conflicts" >> "$GITHUB_OUTPUT"
+            echo "Manual resolution required; the merge was left untouched."
           fi
 
       - name: Open sync-conflict issue
@@ -109,6 +142,8 @@ jobs:
               '4. Run `just check` and the fork-owned test suites (see `.github/FORK_OWNED_FILES` for the markers to grep for).',
               '5. Open a PR titled `chore: sync upstream $(date +%Y-%m-%d)` and reference this issue.',
               '6. After the PR merges, the next scheduled sync will be a no-op.',
+              '',
+              'Paths listed in `.github/GENERATED_UPSTREAM_FILES` are cleared automatically when they are the *only* conflicts. If one appears here, a real conflict landed alongside it.',
               '',
               '## Commit refs',
               '',

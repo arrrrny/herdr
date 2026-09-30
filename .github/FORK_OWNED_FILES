@@ -24,6 +24,10 @@ src/integration/env.rs                        ::  arrrrny/herdr#4
 # Agent lifecycle / lowered state from pane report-agent (arrrrny/herdr#1, #9)
 src/terminal/state.rs                         ::  arrrrny/herdr#1
 src/pane.rs                                   ::  arrrrny/herdr#1
+# #9 unsequenced report ordering. Upstream extracted the ordering rule into
+# hook_report_is_newer, so the fork's "unsequenced reports are authoritative"
+# behavior now lives there instead of inside accept_hook_report.
+src/terminal/state.rs                         ::  arrrrny/herdr#9
 
 # macOS terminal-notifier click target marker (arrrrny/herdr#34)
 src/platform/macos.rs                         ::  notification_click_target.json
@@ -83,6 +87,10 @@ src/integration/tests.rs                      ::  install_letta_keeps_a_symlinke
 # newer probe and matrix changes.
 scripts/test_windows_input.ps1               ::  herdr-remote')) { (Read-GauntletLines
 scripts/test_windows_input.ps1               ::  client_trace_created_at
+# The driver records the geometry plan it executed so report.py never rebuilds
+# (and drifts from) the oracle independently. Upstream now ships run_specs for the
+# per-run case subsets but still rebuilds geometries from heights/widths.
+scripts/test_windows_input.ps1               ::  $document.geometries
 scripts/windows_input/Common.ps1              ::  function Read-GauntletLines($Path) {
 scripts/windows_input/Native.cs              ::  ClearIfNonKey
 scripts/windows_input/Probe.ps1               ::  ClearIfNonKey
@@ -93,3 +101,30 @@ scripts/test_windows_input.py                ::  out_of_matrix_observations_are_
 # justfile line that upstream also edits, so it needs the same survival check as
 # the rest of the fork. The 2026-09-18 sync conflicted on exactly this line.
 justfile                                      ::  test_fork_owned_guard
+
+# Generated-upstream-file guardrail. The daily sync may clear a conflict to
+# upstream when every conflicted path is an upstream-CI-generated tree AND these
+# checks prove none of them carry fork-owned content. Deleting either script
+# silently removes that proof and turns the sync shortcut into blind data loss.
+# Note the marker for the list is its `generated-by:` sentinel, not a path:
+# `distribution/preview.json` also appears in docs/preview/README.md, and using
+# it would make the generated-file guardrail reject that upstream-authored file.
+.github/GENERATED_UPSTREAM_FILES              ::  generated-by: upstream-preview-ci
+scripts/generated_snapshot_guard.py           ::  is_distinctive_marker
+scripts/sync_resolve_generated.py             ::  not decision.all_generated
+scripts/test_generated_snapshot_guard.py      ::  test_exact_path_entries_do_not_match_sibling_files
+scripts/test_sync_resolve_generated.py        ::  test_real_conflict_aborts_and_writes_nothing
+
+# 2026-09-29 sync: the review of the upstream merge surfaced real defects in code
+# this fork now carries, fixed here rather than deferred. Each is a hand union
+# with upstream's newer code on the same seam, so they need survival markers.
+src/app/agent_resume.rs                       ::  fn resume_shell_command(
+src/app/agents.rs                             ::  pub(super) fn available_shell_name
+src/platform/unix_image_files.rs              ::  is_transient_write_error
+src/cli/machine.rs                            ::  default_label_agrees_across_target_spellings
+src/cli/pane.rs                               ::  a_literal_double_dash_flag_value_is_not_the_separator
+src/server/render_stream.rs                   ::  prepared semantic patch carried no pane patch
+src/kitty_graphics/surface.rs                 ::  A true per-image
+src/client/frame_output.rs                    ::  PROBE_IMAGE_ID
+crates/ghostty-vt/src/lib.rs                  ::  validate_image_dimensions
+crates/ghostty-vt/src/png_forward_tests.rs    ::  hostile_header_really_reaches_the_allocation_point

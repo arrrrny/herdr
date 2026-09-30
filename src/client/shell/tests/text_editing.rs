@@ -399,7 +399,8 @@ fn every_field_renders_long_unicode_across_resize_without_mutation() {
                     );
                 }
                 if let Some(cursor) = frame
-                    .and_then(|frame| frame.cursor)
+                    .as_ref()
+                    .and_then(|frame| frame.cursor.as_ref())
                     .filter(|cursor| cursor.visible)
                 {
                     assert!(cursor.x < width && cursor.y < height, "field {field}");

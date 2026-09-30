@@ -404,6 +404,8 @@ mod remote_bridge_tests;
 #[cfg(unix)]
 mod unix_common;
 #[cfg(unix)]
+pub(crate) mod unix_image_files;
+#[cfg(unix)]
 pub(crate) use unix_common::{
     begin_cli_output, check_config_write_target, config_file_link_count, end_cli_output,
     forward_remote_bridge_stdio, write_existing_config, RemoteBridgeWake,
