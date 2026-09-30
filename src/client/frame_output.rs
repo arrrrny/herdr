@@ -76,7 +76,11 @@ pub(super) fn write_composed_frame(
                             writer,
                             "\x1b_Ga=q,t=t,f=32,s=1,v=1,i={PROBE_IMAGE_ID},q=2;{path}\x1b\\"
                         )?;
-                        write!(writer, "\x1b_Ga=d,d=A,i={PROBE_IMAGE_ID}\x1b\\")?;
+                        // The delete has to be id-targeted: `d=A` deletes every
+                        // placement visible on the host screen and never looks
+                        // at `i=`, so it would wipe unrelated images while
+                        // leaving the stored probe behind.
+                        write!(writer, "\x1b_Ga=d,d=I,i={PROBE_IMAGE_ID},q=2;\x1b\\")?;
                     }
                 }
                 let path = file_eligible.then(|| files.prepare(data)).flatten();
