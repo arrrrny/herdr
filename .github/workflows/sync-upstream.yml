@@ -118,6 +118,7 @@ jobs:
           fi
 
       - name: Open sync-conflict issue
+        id: conflict_issue
         if: steps.merge.outputs.merge_state == 'conflicts'
         uses: actions/github-script@v7
         with:
@@ -227,7 +228,14 @@ jobs:
         # The conflict and guardrail paths each fail the job on purpose and open
         # their own issue; without these two clauses this step also fires for
         # them and files a duplicate catch-all for a failure already reported.
-        if: failure() && steps.verify.outcome != 'failure' && steps.merge.outputs.merge_state != 'conflicts'
+        #
+        # The conflict clause keys on the conflict issue step's outcome rather
+        # than on `merge_state`: the merge step writes `conflicts` for any
+        # non-zero exit, so a git error that is not a conflict would otherwise
+        # suppress the catch-all and lose the only issue carrying the run URL.
+        # Keying on the outcome suppresses the duplicate only when the
+        # conflict path actually reported itself.
+        if: failure() && steps.verify.outcome != 'failure' && steps.conflict_issue.outcome != 'success'
         uses: actions/github-script@v7
         with:
           script: |
@@ -235,7 +243,7 @@ jobs:
             const body = [
               'The daily upstream sync failed unexpectedly.',
               '',
-              'This is a **catch-all** — the specific failure path (conflict, guardrail, push rejection, or other) did not open its own issue.',
+              'This is a **catch-all** — the specific failure path (guardrail, push rejection, or other) did not open its own issue.',
               '',
               '## Run',
               '',
@@ -245,8 +253,7 @@ jobs:
               '',
               '1. Open the run log above and find the failing step.',
               '2. If it is a **push rejection** (workflow file changes), the token needs `workflows` permission or the workflow file needs updating.',
-              '3. If it is a **merge conflict**, a separate conflict issue should exist — check `sync` label.',
-              '4. If it is **something else**, resolve manually.',
+              '3. If it is **something else**, resolve manually.',
               '',
               'cc: the fork maintainer.',
             ].join('\n');
