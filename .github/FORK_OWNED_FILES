@@ -128,3 +128,5 @@ src/kitty_graphics/surface.rs                 ::  A true per-image
 src/client/frame_output.rs                    ::  PROBE_IMAGE_ID
 crates/ghostty-vt/src/lib.rs                  ::  validate_image_dimensions
 crates/ghostty-vt/src/png_forward_tests.rs    ::  hostile_header_really_reaches_the_allocation_point
+.github/workflows/sync-upstream.yml           ::  steps.conflict_issue.outcome != 'success'
+scripts/sync-upstream-workflow.test.ts         ::  stays silent when the conflict path already opened an issue
