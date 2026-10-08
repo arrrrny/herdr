@@ -202,6 +202,10 @@ pub enum ResponseResult {
         changed: bool,
         reason: ClientWindowTitleReason,
     },
+    ClientActivateEndpoint {
+        /// Whether a running client shell that understands the request received it.
+        delivered: bool,
+    },
     IntegrationList {
         integrations: Vec<super::integrations::IntegrationInfo>,
     },

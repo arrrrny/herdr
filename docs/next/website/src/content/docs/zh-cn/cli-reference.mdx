@@ -82,6 +82,19 @@ herdr --machine "Build machine" worktree create --cwd /srv/project --branch revi
 
 远程命令不会继承调用方的本地窗格 ID，请显式指定远程 ID。`--current` 不能引用本地窗格。远程 worktree 路径必须为绝对路径、`~` 或以 `~/` 开头（由服务器展开）；插件 link 路径必须为绝对路径。每次只操作一台机器，不包含合并列表或通过其他 TUI 连接转发的功能。
 
+## 应用
+
+```bash
+herdr app focus --pane <pane_id>
+herdr app focus --tab <tab_id>
+herdr app focus --workspace <workspace_id>
+herdr app focus --machine <label-or-id> --pane <pane_id>
+```
+
+`app focus` 让运行中的应用跳转到目标，效果与点击该窗格的通知相同：`--pane`、`--tab`、`--workspace` 三者必须且只能指定一个。加上 `--machine` 时，应用会切换到该已保存机器的窗格并聚焦目标；省略时，命令通过本地服务器聚焦本地目标。
+
+命令会输出实际采用的路径：运行中的应用接受跳转时为 `focused (app)`；没有运行中的应用接受、改由已保存机器的服务器聚焦时为 `focused (server-side)`；本地路径为 `focused (local)`。`--machine` 需要启用的配置 ID 或唯一标签；未知机器或该机器上不存在的目标 ID 会以非零状态码失败。
+
 ## 徽章
 
 ```bash

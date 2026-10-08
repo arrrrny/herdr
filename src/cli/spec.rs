@@ -40,6 +40,7 @@ pub(super) fn command() -> Command {
         .subcommand(workspace_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
+        .subcommand(app_command())
         .subcommand(notification_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
@@ -295,6 +296,19 @@ fn tab_command() -> Command {
                 .arg(required("label", "LABEL").num_args(1..)),
         )
         .subcommand(id_command("close", "tab_id", "Close a tab"))
+}
+
+fn app_command() -> Command {
+    Command::new("app")
+        .about("Jump a running app to a target")
+        .subcommand(
+            Command::new("focus")
+                .about("Focus a pane, tab, or workspace in the running app")
+                .arg(option("machine", "LABEL-OR-ID"))
+                .arg(option("pane", "PANE_ID"))
+                .arg(option("tab", "TAB_ID"))
+                .arg(option("workspace", "WORKSPACE_ID")),
+        )
 }
 
 fn notification_command() -> Command {

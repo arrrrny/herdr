@@ -315,6 +315,25 @@ fn validate_machine_command(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Routes API calls to a saved machine for the duration of `run`, bridging lazily
+/// on first use. Tests that pre-seed a client override keep talking to it.
+pub(super) fn with_machine_profile<T>(profile: SavedSshEndpoint, run: impl FnOnce() -> T) -> T {
+    let _scope = TARGET.with(|target| {
+        #[cfg(test)]
+        let client_override = target
+            .borrow()
+            .as_ref()
+            .and_then(|existing| existing.client_override.clone());
+        TargetScope(target.replace(Some(MachineTarget {
+            profile,
+            bridge: None,
+            #[cfg(test)]
+            client_override,
+        })))
+    });
+    run()
+}
+
 #[cfg(test)]
 pub(super) fn with_test_client<T>(client: ApiClient, run: impl FnOnce() -> T) -> T {
     let _scope = TARGET.with(|target| {

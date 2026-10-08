@@ -84,6 +84,19 @@ Requests and responses travel through the JSON API over non-interactive SSH; API
 
 Local pane IDs are not inherited by remote commands. Use explicit remote IDs; `--current` cannot refer to the caller's local pane. Remote worktree paths must be absolute, `~`, or start with `~/` (expanded on the server); plugin link paths must be absolute. The prefix targets one machine at a time; combined listings and routing through another TUI's connections are not included.
 
+## App
+
+```bash
+herdr app focus --pane <pane_id>
+herdr app focus --tab <tab_id>
+herdr app focus --workspace <workspace_id>
+herdr app focus --machine <label-or-id> --pane <pane_id>
+```
+
+`app focus` jumps a running Herdr app to a target the same way clicking that pane's notification does: exactly one of `--pane`, `--tab`, or `--workspace` names the target. With `--machine`, the app switches to that saved machine's pane and focuses the target there. Without it, the command focuses the local target through the local server.
+
+The command prints which path it took: `focused (app)` when a running app accepted the jump, `focused (server-side)` when no running app accepted it and the saved machine's server focused the target instead, and `focused (local)` for the local path. `--machine` requires an enabled saved profile ID or a unique label, and an unknown machine or a target ID that does not exist on it fails with a non-zero exit.
+
 ## Badges
 
 ```bash
