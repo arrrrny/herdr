@@ -82,6 +82,19 @@ JSON API を非対話 SSH で転送します。API の内容を SSH のシェル
 
 呼び出し元のローカルペイン ID は継承しません。リモート ID を明示してください。`--current` でローカルペインを指定することはできません。リモート worktree パスには絶対パス、`~`、または `~/` で始まるパスを指定します（サーバー側で展開）。プラグインの link パスは絶対パスが必要です。対象は 1 台ずつで、一覧の統合や別の TUI の接続を使った転送は含みません。
 
+## アプリ
+
+```bash
+herdr app focus --pane <pane_id>
+herdr app focus --tab <tab_id>
+herdr app focus --workspace <workspace_id>
+herdr app focus --machine <label-or-id> --pane <pane_id>
+```
+
+`app focus` は、そのペインの通知をクリックしたときと同じように、実行中のアプリを対象へジャンプさせます。`--pane`、`--tab`、`--workspace` のいずれか 1 つだけを指定します。`--machine` を付けると、アプリはその保存済みマシンのペインへ切り替えて対象をフォーカスします。省略した場合は、ローカルサーバー経由でローカルの対象をフォーカスします。
+
+コマンドは実際に使われた経路を出力します。実行中のアプリがジャンプを受け入れた場合は `focused (app)`、受け入れるアプリがなく保存済みマシンのサーバーがフォーカスした場合は `focused (server-side)`、ローカル経路は `focused (local)` です。`--machine` には有効なプロファイル ID または一意なラベルが必要で、未知のマシンやそこに存在しない対象 ID は非ゼロ終了になります。
+
 ## バッジ
 
 ```bash

@@ -2590,3 +2590,189 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }
+
+fn activate_request(
+    machine: &str,
+    target: crate::api::schema::ClientActivateEndpointTarget,
+) -> crate::api::schema::ClientActivateEndpointParams {
+    crate::api::schema::ClientActivateEndpointParams {
+        machine: machine.into(),
+        target,
+    }
+}
+
+#[test]
+fn activate_endpoint_request_switches_machine_and_focuses_the_target() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    for target in [
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+        ClientActivateEndpointTarget::Workspace("ws_1".into()),
+    ] {
+        let expected = match &target {
+            ClientActivateEndpointTarget::Pane(pane_id) => {
+                ClientEndpointFocusTarget::Pane(pane_id.clone())
+            }
+            ClientActivateEndpointTarget::Tab(tab_id) => {
+                ClientEndpointFocusTarget::Tab(tab_id.clone())
+            }
+            ClientActivateEndpointTarget::Workspace(workspace_id) => {
+                ClientEndpointFocusTarget::Workspace(workspace_id.clone())
+            }
+        };
+        let outcome = state.activate_endpoint_request(&activate_request("Build", target));
+        assert!(
+            matches!(
+                outcome.actions.as_slice(),
+                [ClientShellAction::ActivateEndpoint { endpoint_id, target: Some(target) }]
+                    if endpoint_id == &remote && target == &expected
+            ),
+            "{:?}",
+            outcome.actions
+        );
+    }
+}
+
+#[test]
+fn activate_endpoint_request_accepts_profile_ids() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    let ClientEndpointId::Ssh(profile_id) = &remote else {
+        panic!("expected an SSH endpoint");
+    };
+    let outcome = state.activate_endpoint_request(&activate_request(
+        profile_id.as_str(),
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint { endpoint_id, .. }] if endpoint_id == &remote
+    ));
+}
+
+#[test]
+fn activate_endpoint_request_focuses_in_place_on_the_active_machine() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    assert!(state.activate_endpoint_projection(&remote));
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::Endpoint { endpoint_id, request, .. }]
+            if endpoint_id == &remote
+                && matches!(
+                    &request.method,
+                    crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_1"
+                )
+    ));
+}
+
+#[test]
+fn activate_endpoint_request_reports_an_offline_machine_without_navigating() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Reconnecting);
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(outcome.actions.is_empty());
+    assert!(outcome.repaint);
+    let notice = state
+        .visible_endpoint_notice
+        .take()
+        .expect("endpoint notice");
+    assert!(
+        notice.body.contains("Build is unavailable"),
+        "{}",
+        notice.body
+    );
+}
+
+#[test]
+fn activate_endpoint_request_ignores_unknown_and_ambiguous_machines() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, _remote) = state_with_remote();
+    let unknown = state.activate_endpoint_request(&activate_request(
+        "missing",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(unknown.actions.is_empty());
+    assert!(!unknown.repaint);
+
+    let duplicate = SavedSshEndpoint::new("Build", "other@build.example", "agents").unwrap();
+    state.set_endpoint_catalog(&[remote_profile(), duplicate]);
+    let ambiguous = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(ambiguous.actions.is_empty());
+    assert!(!ambiguous.repaint);
+}
+
+#[derive(Clone)]
+struct GlueEndpointTransport(std::sync::Arc<std::sync::Mutex<Vec<crate::protocol::ClientMessage>>>);
+
+impl crate::client::endpoint::EndpointTransport for GlueEndpointTransport {
+    fn send(&mut self, message: &crate::protocol::ClientMessage) -> std::io::Result<()> {
+        self.0.lock().unwrap().push(message.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn activate_endpoint_control_schedules_the_endpoint_switch_for_a_live_shell() {
+    use crate::api::schema::{ClientActivateEndpointParams, ClientActivateEndpointTarget};
+
+    let mut state = crate::client::ClientState::test_new();
+    let profile = remote_profile();
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    {
+        let shell = state.shell.as_mut().expect("shell mode");
+        shell.set_endpoint_catalog(std::slice::from_ref(&profile));
+        shell.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+        shell.set_endpoint_snapshot(&remote, Box::new(snapshot()));
+    }
+    let mut endpoints = crate::client::endpoint::EndpointRegistry::new(
+        GlueEndpointTransport(std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))),
+        1,
+        crate::client::endpoint::EndpointNegotiation::new(Vec::new(), Vec::new()),
+    );
+    let mut pending_activation = None;
+    let mut endpoint_commands = crate::client::endpoint_commands::EndpointCommands::default();
+    let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
+    let mut scheduled_activation = None;
+
+    let detached = crate::client::shell_runtime::apply_activate_endpoint_request(
+        &mut state,
+        &ClientActivateEndpointParams {
+            machine: "Build".into(),
+            target: ClientActivateEndpointTarget::Pane("pane_1".into()),
+        },
+        &mut endpoints,
+        &mut pending_activation,
+        &mut endpoint_commands,
+        &mut prefix_input_source,
+        &mut scheduled_activation,
+    )
+    .unwrap();
+
+    assert!(!detached);
+    assert!(matches!(
+        scheduled_activation,
+        Some(crate::client::ClientLoopEvent::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+            force: false,
+        }) if endpoint_id == remote && pane_id == "pane_1"
+    ));
+}

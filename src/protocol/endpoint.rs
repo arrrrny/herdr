@@ -31,6 +31,7 @@ pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+pub const ACTIVATE_ENDPOINT_KIND: &str = "endpoint.activate.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {
@@ -72,6 +73,9 @@ pub struct EndpointClientHello {
     pub input_codecs: Vec<String>,
     #[serde(default)]
     pub blob_codecs: Vec<String>,
+    /// Accept an activate-endpoint request and jump this shell to the named machine.
+    #[serde(default)]
+    pub activate_endpoint: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +139,16 @@ pub fn agent_view_projection_message(
     Ok(ServerMessage::EndpointControl {
         kind: AGENT_VIEW_PROJECTION_KIND.into(),
         data: serde_json::to_string(&projection)?,
+    })
+}
+
+/// Asks a client shell to switch to a saved machine and focus a target there.
+pub fn activate_endpoint_message(
+    params: &crate::api::schema::ClientActivateEndpointParams,
+) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: ACTIVATE_ENDPOINT_KIND.into(),
+        data: serde_json::to_string(params)?,
     })
 }
 
@@ -219,6 +233,7 @@ mod tests {
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
             blob_codecs: vec![BLOB_CODEC_V1.into()],
+            activate_endpoint: false,
         }
     }
 

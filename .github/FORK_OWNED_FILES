@@ -130,3 +130,18 @@ crates/ghostty-vt/src/lib.rs                  ::  validate_image_dimensions
 crates/ghostty-vt/src/png_forward_tests.rs    ::  hostile_header_really_reaches_the_allocation_point
 .github/workflows/sync-upstream.yml           ::  steps.conflict_issue.outcome != 'success'
 scripts/sync-upstream-workflow.test.ts         ::  stays silent when the conflict path already opened an issue
+
+# External one-shot to jump the running app to a saved machine's pane
+# (arrrrny/herdr#73): the CLI verb resolves a machine and its target, the
+# local server forwards `client.activate_endpoint` to capable client shells, and
+# the shell reuses the notification-click jump. Upstream will never accept it.
+src/cli/app.rs                                ::  activate_endpoint
+src/cli.rs                                    ::  app::run_app_command
+src/cli/spec.rs                               ::  Jump a running app to a target
+src/api/schema/common.rs                      ::  ClientActivateEndpointParams
+src/protocol/endpoint.rs                      ::  ACTIVATE_ENDPOINT_KIND
+src/client/handshake.rs                       ::  activate_endpoint: true
+src/client/mod.rs                             ::  apply_activate_endpoint_request
+src/client/shell/endpoints.rs                 ::  activate_endpoint_request
+src/server/headless.rs                        ::  handle_client_activate_endpoint_api
+src/server/clients.rs                         ::  shell_activate_endpoint_supported

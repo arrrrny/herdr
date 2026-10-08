@@ -1730,6 +1730,76 @@
           ],
           "type": "object"
         },
+        "ClientActivateEndpointParams": {
+          "description": "Asks a running client shell to switch to a saved machine and focus a target there.",
+          "properties": {
+            "machine": {
+              "description": "Saved machine label or profile ID.",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/schemas/request/$defs/ClientActivateEndpointTarget"
+            }
+          },
+          "required": [
+            "machine",
+            "target"
+          ],
+          "type": "object"
+        },
+        "ClientActivateEndpointTarget": {
+          "description": "Focus target inside the machine a client shell is asked to activate.",
+          "oneOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "workspace",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "tab",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "pane",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
           "properties": {
@@ -4916,6 +4986,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "client.activate_endpoint",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientActivateEndpointParams"
             }
           },
           "required": [
@@ -10114,6 +10200,23 @@
                 "type",
                 "changed",
                 "reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "delivered": {
+                  "description": "Whether a running client shell that understands the request received it.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "client_activate_endpoint",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "delivered"
               ],
               "type": "object"
             },

@@ -499,6 +499,38 @@ pub(super) fn rollback_endpoint_activation(
     }
 }
 
+/// Applies an external activate-endpoint request from the local server.
+///
+/// Returns true when the request detached the client.
+pub(super) fn apply_activate_endpoint_request(
+    state: &mut ClientState,
+    params: &crate::api::schema::ClientActivateEndpointParams,
+    endpoints: &mut endpoint::EndpointRegistry,
+    pending_activation: &mut Option<endpoint::PendingEndpointActivation>,
+    endpoint_commands: &mut endpoint_commands::EndpointCommands,
+    prefix_input_source: &mut impl crate::platform::PrefixInputSource,
+    scheduled_activation: &mut Option<ClientLoopEvent>,
+) -> Result<bool, ClientError> {
+    let Some(shell) = state.shell.as_mut() else {
+        return Ok(false);
+    };
+    let outcome = shell.activate_endpoint_request(params);
+    let frame = outcome
+        .repaint
+        .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+        .flatten();
+    finish_client_shell_input(
+        state,
+        outcome,
+        frame,
+        endpoints,
+        pending_activation,
+        endpoint_commands,
+        prefix_input_source,
+        scheduled_activation,
+    )
+}
+
 pub(super) fn handle_endpoint_disconnect(
     state: &mut ClientState,
     endpoints: &mut endpoint::EndpointRegistry,
