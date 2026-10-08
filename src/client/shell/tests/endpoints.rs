@@ -2719,6 +2719,23 @@ fn activate_endpoint_request_ignores_unknown_and_ambiguous_machines() {
     assert!(!ambiguous.repaint);
 }
 
+#[test]
+fn activate_endpoint_request_routes_an_active_local_selection_through_the_runtime() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, _remote) = state_with_remote();
+    assert!(state.multi_endpoint_active());
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Local",
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint { endpoint_id, target: Some(..) }]
+            if endpoint_id == &ClientEndpointId::Local
+    ));
+}
+
 #[derive(Clone)]
 struct GlueEndpointTransport(std::sync::Arc<std::sync::Mutex<Vec<crate::protocol::ClientMessage>>>);
 

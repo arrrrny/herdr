@@ -505,6 +505,8 @@ impl ClientShellState {
         params: &crate::api::schema::ClientActivateEndpointParams,
     ) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
+        self.pending_workspace_highlight = None;
+        self.pending_agent_reveal = None;
         let Some(endpoint_id) = self.endpoint_for_machine_selector(&params.machine) else {
             tracing::debug!(
                 machine = %params.machine,
@@ -529,7 +531,9 @@ impl ClientShellState {
             outcome.repaint = true;
             return outcome;
         }
-        if endpoint_id == self.active_endpoint_id {
+        if endpoint_id == self.active_endpoint_id
+            && !(endpoint_id.is_local() && self.multi_endpoint_active())
+        {
             outcome.actions = self.focus_endpoint_target(target);
         } else {
             outcome.actions.push(ClientShellAction::ActivateEndpoint {
