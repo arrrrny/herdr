@@ -10,6 +10,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(all(test, unix))]
 use std::fs;
 
+use crate::api::http_push;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, Method, Request, ResponseResult, ServerCapabilities, SuccessResponse,
 };
@@ -39,6 +40,7 @@ pub struct ServerHandle {
     path: PathBuf,
     identity: SocketFileIdentity,
     running: Arc<AtomicBool>,
+    _http_push: Option<crate::api::http_push::HttpPushServerHandle>,
 }
 
 impl Drop for ServerHandle {
@@ -119,6 +121,20 @@ fn start_server_inner(
 
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
+
+    // Agent state-report push listener (Ziki contract §2). Fail-soft: a bind
+    // failure only logs — agents fall back to screen-marker/OSC detection.
+    let http_push = match http_push::resolved_http_push_listen_addr() {
+        Some(addr) => match http_push::start_http_push_server(api_tx.clone(), addr) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                warn!(addr = %addr, err = %err, "agent push http server failed to start");
+                None
+            }
+        },
+        None => None,
+    };
+
     let spawned = crate::thread_spawn::spawn_named("herdr-api-accept", move || {
         run_accept_loop(
             listener.incoming(),
@@ -164,6 +180,7 @@ fn start_server_inner(
         path,
         identity,
         running,
+        _http_push: http_push,
     })
 }
 
@@ -407,7 +424,7 @@ fn handle_connection_with_stop(
             write_json_line(
                 &mut stream,
                 &SuccessResponse {
-                    id: request_id,
+                    id: request_id.clone(),
                     result: ResponseResult::Ok {},
                 },
             )?;
@@ -420,9 +437,13 @@ fn handle_connection_with_stop(
                         lease.refresh()?;
                         std::thread::sleep(CONNECTION_POLL_INTERVAL);
                     }
-                    _ => break,
+                    // The registration lasts until the connection closes, so a
+                    // byte arriving on it does not end the lease.
+                    LocalStreamRead::Data => {}
+                    LocalStreamRead::Closed => break,
                 }
             }
+            crate::logging::api_request_completed(&request_id, method, "stream_closed", changes_ui);
             Ok(())
         }
         Method::EventsSubscribe(params) => {
@@ -616,6 +637,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::CommandInvoke(_) => "command.invoke",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
+        Method::ClientActivateEndpoint(_) => "client.activate_endpoint",
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
         Method::SessionSnapshot(_) => "session.snapshot",
         Method::WorkspaceCreate(_) => "workspace.create",
@@ -705,6 +727,9 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PluginPaneOpen(_) => "plugin.pane.open",
         Method::PluginPaneFocus(_) => "plugin.pane.focus",
         Method::PluginPaneClose(_) => "plugin.pane.close",
+        Method::BadgeSet(_) => "badge.set",
+        Method::BadgeClear(_) => "badge.clear",
+        Method::BadgeList(_) => "badge.list",
     }
 }
 
@@ -919,6 +944,11 @@ fn stream_subscriptions(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
 ) -> std::io::Result<()> {
+    // Capture the live cursor at subscribe time so the stream only delivers
+    // events emitted after this point. Replaying the retained event buffer
+    // (events with a sequence at or below the current one) would re-send stale
+    // workspace/tab/pane lifecycle history to every new subscriber; explicit
+    // replay requires a future cursor/replay parameter and is out of scope.
     let event_start_sequence = event_hub.current_sequence();
     let mut subscriptions = Vec::with_capacity(params.subscriptions.len());
     for (index, subscription) in params.subscriptions.into_iter().enumerate() {
@@ -978,9 +1008,6 @@ fn stream_subscriptions(
                 }
             };
             for event in events {
-                if should_stop_connection(&mut stream, running)? {
-                    return Ok(());
-                }
                 if let Err(err) = write_json_line(&mut stream, &event) {
                     if is_connection_closed_error(&err) {
                         return Ok(());

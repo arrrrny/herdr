@@ -78,6 +78,7 @@ async fn metadata_only_shell_is_isolated_until_surface_activation() {
             mouse_capture: true,
             surface_active: false,
             writer,
+            activate_endpoint: false,
         })
     );
     let _ = client_shell_snapshot(&control_rx);
@@ -294,6 +295,7 @@ async fn background_surface_activation_preserves_focused_viewer_geometry() {
             mouse_capture: false,
             surface_active: false,
             writer,
+            activate_endpoint: false,
         })
     );
     let _ = background_control
@@ -408,6 +410,7 @@ async fn presentation_sync_epoch_replays_modes_and_title() {
             mouse_capture: true,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     let _ = client_shell_snapshot(&control_rx);
@@ -525,6 +528,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             mouse_capture: true,
             surface_active: true,
             writer: source_writer,
+            activate_endpoint: false,
         })
     );
     let source_snapshot = client_shell_snapshot(&source_control);
@@ -549,6 +553,7 @@ async fn two_headless_servers_drive_atomic_endpoint_handoff() {
             mouse_capture: true,
             surface_active: false,
             writer: target_writer,
+            activate_endpoint: false,
         })
     );
     let remote_snapshot = client_shell_snapshot(&target_control);

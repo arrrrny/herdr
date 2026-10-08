@@ -721,6 +721,12 @@ pub(crate) enum ClientShellNotificationEffect {
     System {
         title: String,
         body: Option<String>,
+        /// Public pane id (`<workspace_id>:p<encoded>`) used as the macOS
+        /// system-notification click target; `None` when the originating
+        /// event carries no pane (e.g. update-ready toasts). Windows routes its
+        /// own actionable target through `target` instead.
+        #[cfg(not(windows))]
+        click_target: Option<String>,
         #[cfg(windows)]
         target: Option<ClientSystemNotificationTarget>,
     },

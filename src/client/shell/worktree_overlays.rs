@@ -158,7 +158,10 @@ pub(super) fn render_worktree_open_overlay(
             Rect::new(
                 search.x + 3,
                 search.y,
-                search.width.saturating_sub(4 + display_width(&count)),
+                search
+                    .width
+                    .saturating_sub(4 + display_width(&count))
+                    .max(1),
                 1,
             ),
             &open.query,

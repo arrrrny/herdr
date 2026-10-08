@@ -798,6 +798,16 @@ pub(crate) fn collect_scene(
 
 /// Delivered pane images that left the view but still exist in their terminal,
 /// bounded and ordered from most to least recently visible.
+///
+/// The ordering is recency-ordered *between* groups: assets that just scrolled
+/// out are considered newer than assets already sitting in `delivered.offscreen`,
+/// which is itself kept most-recent-first. Within the just-hidden group there is
+/// no finer recency signal to order by — they all left the view in the same
+/// pass and `delivered.assets` is a set, not a sequence — so they are ordered
+/// by `(pane, image_id)` purely to make eviction deterministic. A true per-image
+/// recency order would need a delivery sequence stamped onto the asset key,
+/// which is a refactor of this per-frame path and needs the render-scaling
+/// benchmark rather than a drive-by change.
 fn offscreen_assets(
     app: &crate::app::App,
     workspace_index: Option<usize>,
@@ -825,6 +835,8 @@ fn offscreen_assets(
     if newly_hidden.is_empty() && delivered.offscreen.is_empty() {
         return Vec::new();
     }
+    // Deterministic order within the just-hidden group; see the doc comment on
+    // why this is not a finer recency order.
     newly_hidden.sort_by_key(|key| pane_image(key));
     let visible_sources = visible
         .iter()

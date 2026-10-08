@@ -827,6 +827,24 @@ fn navigation_highlight_requires_enqueued_focus_and_yields_to_new_intent() {
 }
 
 #[test]
+fn activate_endpoint_request_clears_pending_navigation_state() {
+    use crate::api::schema::{ClientActivateEndpointParams, ClientActivateEndpointTarget};
+
+    let mut state = local_navigation_state(false);
+    state.set_endpoint_methods(None);
+    request_local_navigation(&mut state, 1);
+    assert!(state.pending_workspace_highlight.is_some());
+    state.pending_agent_reveal = Some((ClientEndpointId::Local, "pane_1".into()));
+    let outcome = state.activate_endpoint_request(&ClientActivateEndpointParams {
+        machine: "Local".into(),
+        target: ClientActivateEndpointTarget::Tab("tab_1".into()),
+    });
+    assert!(!outcome.actions.is_empty());
+    assert!(state.pending_workspace_highlight.is_none());
+    assert!(state.pending_agent_reveal.is_none());
+}
+
+#[test]
 fn directional_pane_focus_releases_an_accepted_workspace_highlight() {
     use crate::api::schema::{Method, PaneDirection, ResponseResult};
 

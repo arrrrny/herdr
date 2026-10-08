@@ -67,6 +67,23 @@ pub struct ClientShellSurfaceSetParams {
     pub active: bool,
 }
 
+/// Asks a running client shell to switch to a saved machine and focus a target there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ClientActivateEndpointParams {
+    /// Saved machine label or profile ID.
+    pub machine: String,
+    pub target: ClientActivateEndpointTarget,
+}
+
+/// Focus target inside the machine a client shell is asked to activate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "id")]
+pub enum ClientActivateEndpointTarget {
+    Workspace(String),
+    Tab(String),
+    Pane(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SplitDirection {

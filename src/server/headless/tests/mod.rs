@@ -1,5 +1,6 @@
 use super::*;
 
+mod activate_endpoint;
 mod event_fairness;
 mod native_graphics;
 #[path = "pane_move.rs"]
@@ -737,6 +738,7 @@ async fn client_shell_attach_seeds_workspace() {
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
 
@@ -770,6 +772,7 @@ async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
         surface_delta: false,
         surface_scroll: false,
         writer,
+        activate_endpoint: false,
     });
     let (_, initial) = client_shell_projection(&control_rx);
     assert!(initial.completions.is_empty());
@@ -829,6 +832,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     let _initial_snapshot = client_shell_snapshot(&control_rx);
@@ -948,6 +952,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
             mouse_capture: false,
             surface_active: false,
             writer,
+            activate_endpoint: false,
         })
     );
     let initial = client_shell_snapshot(&control_rx);
@@ -1051,6 +1056,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     let snapshot = client_shell_snapshot(&control_rx);
@@ -1219,6 +1225,7 @@ fn connect_test_shell(
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     (control, render)
@@ -1824,6 +1831,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             mouse_capture: false,
             surface_active: true,
             writer: local_writer,
+            activate_endpoint: false,
         })
     );
     let local_snapshot = client_shell_snapshot(&local_control);
@@ -1849,6 +1857,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
             mouse_capture: false,
             surface_active: true,
             writer: endpoint_writer,
+            activate_endpoint: false,
         })
     );
     let endpoint_snapshot = client_shell_snapshot(&endpoint_control);
@@ -2769,6 +2778,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     let initial_revision = client_shell_snapshot(&control_rx).revision;
@@ -3016,6 +3026,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
             mouse_capture: false,
             surface_active: true,
             writer,
+            activate_endpoint: false,
         })
     );
     let _snapshot = client_shell_snapshot(&control_rx);
@@ -6291,6 +6302,7 @@ async fn client_shell_requests_host_pixels_for_an_unfocused_pixel_pane() {
             endpoint_keybindings: false,
             mouse_capture: true,
             surface_active: true,
+            activate_endpoint: false,
             writer,
         })
     );

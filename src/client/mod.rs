@@ -2052,6 +2052,24 @@ async fn run_client_loop(
                         }
                         let snapshot = match endpoint::decode_endpoint_control(&kind, &data) {
                             Ok(endpoint::EndpointControlMessage::HealthPong) => continue,
+                            Ok(endpoint::EndpointControlMessage::ActivateEndpoint(params)) => {
+                                // Only the local server owns the shell's presentation, so a
+                                // remote endpoint cannot redirect this client's view.
+                                if endpoint_id.is_local()
+                                    && apply_activate_endpoint_request(
+                                        &mut state,
+                                        &params,
+                                        &mut write_stream,
+                                        &mut pending_activation,
+                                        &mut endpoint_commands,
+                                        &mut prefix_input_source,
+                                        &mut scheduled_activation,
+                                    )?
+                                {
+                                    return Ok(());
+                                }
+                                continue;
+                            }
                             Ok(endpoint::EndpointControlMessage::AgentViewProjection(
                                 projection,
                             )) => {

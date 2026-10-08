@@ -104,14 +104,11 @@ impl ClientShellState {
         else {
             return;
         };
-        let heights = rows
-            .iter()
-            .map(|row| row.agent.rows.len().max(1).min(u16::MAX as usize) as u16)
-            .collect::<Vec<_>>();
-        let mut gaps = vec![self.config.agents.row_gap; rows.len()];
-        if let Some(last) = gaps.last_mut() {
-            *last = 0;
-        }
+        let (heights, gaps) = super::agent_sidebar::agent_list_row_heights_and_gaps(
+            &rows,
+            |row| row.agent.rows.len(),
+            self.config.agents.row_gap,
+        );
         self.agent_scroll = super::scroll::list_scroll_start_to_reveal(
             &heights,
             &gaps,

@@ -126,8 +126,17 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires dbus-daemon; uses a private bus, never requests host shutdown"]
     async fn shutdown_warning_holds_inhibitor_until_monitor_is_dropped() {
+        // Uses a private bus and never requests host shutdown. Skip where
+        // dbus-daemon is missing so this still runs in the Linux CI job.
+        if Command::new("dbus-daemon")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: dbus-daemon is not installed");
+            return;
+        }
         for already_preparing in [false, true] {
             let mut bus = PrivateBus(
                 Command::new("dbus-daemon")

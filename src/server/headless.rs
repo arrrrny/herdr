@@ -1503,6 +1503,39 @@ impl HeadlessServer {
         sent
     }
 
+    /// Forwards an activate-endpoint request to the client-rendered shells that accept it.
+    fn handle_client_activate_endpoint_api(
+        &mut self,
+        id: String,
+        params: api::schema::ClientActivateEndpointParams,
+    ) -> String {
+        use api::schema::{ErrorBody, ErrorResponse, ResponseResult, SuccessResponse};
+
+        let message = match crate::protocol::endpoint::activate_endpoint_message(&params) {
+            Ok(message) => message,
+            Err(err) => {
+                return serde_json::to_string(&ErrorResponse {
+                    id,
+                    error: ErrorBody {
+                        code: "internal_error".into(),
+                        message: format!("failed to encode activate endpoint request: {err}"),
+                    },
+                })
+                .unwrap_or_else(|_| "{}".to_string());
+            }
+        };
+        // A shell that never advertised the control would ignore it, so it must
+        // not count as delivery; the caller then falls back to server-side focus.
+        let delivered = self.send_to_client_shells_matching(message, |client| {
+            client.shell_activate_endpoint_supported
+        });
+        serde_json::to_string(&SuccessResponse {
+            id,
+            result: ResponseResult::ClientActivateEndpoint { delivered },
+        })
+        .unwrap_or_else(|_| "{}".to_string())
+    }
+
     fn handle_client_window_title_api(&mut self, id: String, title: Option<String>) -> String {
         use api::schema::{ClientWindowTitleReason, ResponseResult};
 
@@ -1599,6 +1632,15 @@ impl HeadlessServer {
 
     /// Sends an ephemeral semantic event to every connected client-rendered shell.
     fn send_to_client_shells(&mut self, msg: ServerMessage) -> bool {
+        self.send_to_client_shells_matching(msg, |_| true)
+    }
+
+    /// Sends a message to the client-rendered shells that accept it.
+    fn send_to_client_shells_matching(
+        &mut self,
+        msg: ServerMessage,
+        accepts: impl Fn(&ClientConnection) -> bool,
+    ) -> bool {
         let serialized = match Self::frame_server_message(&msg) {
             Ok(framed) => framed,
             Err(err) => {
@@ -1610,7 +1652,8 @@ impl HeadlessServer {
             .clients
             .iter()
             .filter_map(|(&client_id, client)| {
-                matches!(client.mode, ClientConnectionMode::ClientShell).then_some(client_id)
+                (matches!(client.mode, ClientConnectionMode::ClientShell) && accepts(client))
+                    .then_some(client_id)
             })
             .collect::<Vec<_>>();
         let mut sent = false;
@@ -1895,6 +1938,7 @@ impl HeadlessServer {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                activate_endpoint,
                 writer,
             } => {
                 if self.handoff_in_progress {
@@ -1940,6 +1984,7 @@ impl HeadlessServer {
                 connection.shell_uses_endpoint_keybindings = endpoint_keybindings;
                 connection.shell_mouse_capture = mouse_capture;
                 connection.shell_surface_active = surface_active;
+                connection.shell_activate_endpoint_supported = activate_endpoint;
                 connection.render_state.enable_surface_reuse(surface_reuse);
                 connection.render_state.enable_surface_delta(surface_delta);
                 connection
@@ -2924,6 +2969,12 @@ impl HeadlessServer {
         }
 
         match &msg.request.method {
+            api::schema::Method::ClientActivateEndpoint(params) => {
+                let response = self
+                    .handle_client_activate_endpoint_api(msg.request.id.clone(), params.clone());
+                let _ = msg.respond_to.send(response);
+                return false;
+            }
             api::schema::Method::ClientWindowTitleSet(params) => {
                 let response = self.handle_client_window_title_api(
                     msg.request.id.clone(),

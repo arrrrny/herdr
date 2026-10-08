@@ -372,20 +372,29 @@ def summarize(document):
     counts = {status: sum(r["status"] == status for r in rows) for status in ("pass", "fail", "not_run", "unsupported", "inconclusive")}
     # No run may claim all-green just because it produced zero/missing observations.
     planned = set()
-    geometries = [(120, 30, True)] + [(w, h, False) for h in document.get("heights", HEIGHTS) for w in document.get("widths", WIDTHS)] + [(80, 30, False)]
-    run_specs = document.get("run_specs") or [dict(channel=host, path=path, mode=mode, cases=document.get("cases") or list(cases))
-                                               for host in document.get("channels") or ("stable", "preview")
-                                               for path in document.get("paths") or ("direct", "herdr")
-                                               for mode in document.get("modes", MODES)]
+    # The driver records the geometry plan it actually executed, so prefer it over
+    # rebuilding one here; only fall back to the defaults for older documents.
+    # Upstream's run_specs carry the per-run case subsets, and the legacy
+    # channel/path/mode matrix is derived only for documents that predate them.
+    plan = document.get("geometries")
+    geometries = ([(g["width"], g["height"], bool(g.get("full"))) for g in plan] if plan
+                  else [(120, 30, True)] + [(w, h, False) for h in document.get("heights", HEIGHTS) for w in document.get("widths", WIDTHS)] + [(80, 30, False)])
+    selected_cases = document.get("cases") or list(cases)
+    run_specs = document.get("run_specs") or [dict(channel=host, path=path, mode=mode, cases=selected_cases)
+                                            for host in document.get("channels") or ("stable", "preview")
+                                            for path in document.get("paths") or ("direct", "herdr")
+                                            for mode in document.get("modes", MODES)]
     for spec in run_specs:
         for phase, (width, height, full) in enumerate(geometries, 1):
             for case_id in spec["cases"] if full else (case_id for case_id in ("letter-a", "shift-enter", "paste-lf", "mouse-focus-refresh") if case_id in spec["cases"]):
                 planned.add((spec["channel"], spec["path"], spec["mode"], phase, width, height, case_id))
     missing = planned - seen
-    if seen - planned:
-        raise ValueError("Observations outside the declared run matrix")
+    # Matrix drift is reported, not raised: the run's evidence must survive into report.json.
+    errors_out_of_matrix = seen - planned
     hosts = document.get("hosts", [])
     errors = list(document.get("errors", [])) + channel_identity_errors(hosts)
+    if errors_out_of_matrix:
+        errors.append(f"{len(errors_out_of_matrix)} observations outside the declared run matrix")
     expected_hosts = set(document.get("channels") or ("stable", "preview"))
     complete = (bool(rows) and not missing and {h.get("channel") for h in hosts} == expected_hosts
                 and all(h.get("runs") for h in hosts)
