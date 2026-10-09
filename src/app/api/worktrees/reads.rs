@@ -126,6 +126,7 @@ impl App {
                 "workspace not found",
             ));
         };
+        self.require_restored_worktree_ready(ws_idx)?;
         Ok(SourceInput {
             workspace_id: Some(ws.id.clone()),
             membership: ws.worktree_space().cloned(),
