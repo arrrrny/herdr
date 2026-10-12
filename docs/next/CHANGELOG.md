@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Added Ziki agent support: `ziki` panes are detected as a known agent, their state-report pushes are ingested through a new loopback HTTP listener (`POST /api/v1/pane/report/agent` on `127.0.0.1:7878` by default, configurable or disableable with `[server].agent_push_listen_addr`), and `[ziki-state: <state>]` screen markers plus `ziki:<state>` OSC titles drive detection when the push path is unavailable. (#36)
+
 ## [0.9.3] - 2026-09-29
 
 This is a hotfix release for v0.9.2. See the v0.9.2 notes for the full feature release: https://github.com/herdrdev/herdr/releases/tag/v0.9.2

@@ -474,6 +474,76 @@ impl ClientShellState {
         &self.active_endpoint_id == endpoint_id
     }
 
+    /// Resolves a saved-machine selector (profile ID or label) to an attached endpoint.
+    pub(crate) fn endpoint_for_machine_selector(&self, selector: &str) -> Option<ClientEndpointId> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return None;
+        }
+        if let Ok(profile_id) = crate::client::endpoint::ProfileId::parse(selector) {
+            let endpoint_id = ClientEndpointId::Ssh(profile_id);
+            return self
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_id == endpoint_id)
+                .then_some(endpoint_id);
+        }
+        let mut matches = self
+            .endpoints
+            .iter()
+            .filter(|endpoint| endpoint.label == selector);
+        let endpoint = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(endpoint.endpoint_id.clone())
+    }
+
+    /// Applies an external activate-endpoint request, mirroring the notification-click jump.
+    pub(crate) fn activate_endpoint_request(
+        &mut self,
+        params: &crate::api::schema::ClientActivateEndpointParams,
+    ) -> ClientShellInput {
+        let mut outcome = ClientShellInput::default();
+        self.pending_workspace_highlight = None;
+        self.pending_agent_reveal = None;
+        let Some(endpoint_id) = self.endpoint_for_machine_selector(&params.machine) else {
+            tracing::debug!(
+                machine = %params.machine,
+                "activate endpoint request names an unknown or ambiguous machine"
+            );
+            return outcome;
+        };
+        let target = match &params.target {
+            crate::api::schema::ClientActivateEndpointTarget::Workspace(workspace_id) => {
+                ClientEndpointFocusTarget::Workspace(workspace_id.clone())
+            }
+            crate::api::schema::ClientActivateEndpointTarget::Tab(tab_id) => {
+                ClientEndpointFocusTarget::Tab(tab_id.clone())
+            }
+            crate::api::schema::ClientActivateEndpointTarget::Pane(pane_id) => {
+                ClientEndpointFocusTarget::Pane(pane_id.clone())
+            }
+        };
+        if !self.endpoint_is_online(&endpoint_id) {
+            let label = self.endpoint_label(&endpoint_id).to_owned();
+            self.receive_endpoint_unavailable(format!("{label} is unavailable"));
+            outcome.repaint = true;
+            return outcome;
+        }
+        if endpoint_id == self.active_endpoint_id
+            && !(endpoint_id.is_local() && self.multi_endpoint_active())
+        {
+            outcome.actions = self.focus_endpoint_target(target);
+        } else {
+            outcome.actions.push(ClientShellAction::ActivateEndpoint {
+                endpoint_id,
+                target: Some(target),
+            });
+        }
+        outcome
+    }
+
     pub(crate) fn multi_endpoint_active(&self) -> bool {
         self.endpoints.len() > 1
     }

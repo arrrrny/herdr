@@ -110,17 +110,19 @@ impl Replacement {
             // Existing configs can contain secrets. Start their staging file private;
             // the platform writer preserves the original permissions before publication.
             // New configs retain ordinary create/umask/inherited-ACL defaults.
-            let created = crate::platform::create_config_temporary(&temporary, existing.is_some());
-            match created {
-                Ok(file) => drop(file),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
+            let file =
+                match crate::platform::create_config_temporary(&temporary, existing.is_some()) {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(error),
+                };
             let replacement = Self {
                 target: target.clone(),
                 temporary,
             };
-            crate::platform::write_config_temporary(existing, &replacement.temporary, contents)?;
+            // Hand the exclusively-created descriptor to the writer instead of
+            // letting it reopen the staging path by name.
+            crate::platform::write_config_temporary(existing, file, contents)?;
             return Ok(replacement);
         }
         Err(io::Error::new(

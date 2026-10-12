@@ -1,0 +1,1 @@
+../../.specify/extensions/gym/.specify-dev/agent-commands/pi/speckit.gym.warmup.md

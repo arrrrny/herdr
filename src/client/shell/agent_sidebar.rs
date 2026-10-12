@@ -186,21 +186,8 @@ pub(super) fn render_agent_list<T>(
         return;
     }
 
-    let row_heights = rows
-        .iter()
-        .map(|row| row_lines(row).max(1).min(u16::MAX as usize) as u16)
-        .collect::<Vec<_>>();
-    let gaps = rows
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            if index + 1 < rows.len() {
-                config.agents.row_gap
-            } else {
-                0
-            }
-        })
-        .collect::<Vec<_>>();
+    let (row_heights, gaps) =
+        agent_list_row_heights_and_gaps(rows, row_lines, config.agents.row_gap);
     let metrics =
         super::scroll::list_scroll_metrics(&row_heights, &gaps, body.height, *agent_scroll);
     hits.agent_max_scroll = metrics.max_offset_from_bottom;
@@ -232,6 +219,25 @@ pub(super) fn render_agent_list<T>(
         hits.agent_scrollbar = track;
         super::scroll::render_list_scrollbar(buffer, track, metrics, &config.palette);
     }
+}
+
+/// Single source of truth for agent list row placement: the height of each row
+/// and the gap that follows it, with the last gap collapsed to zero.
+pub(super) fn agent_list_row_heights_and_gaps<T>(
+    rows: &[T],
+    row_lines: impl Fn(&T) -> usize,
+    row_gap: u16,
+) -> (Vec<u16>, Vec<u16>) {
+    let row_heights = rows
+        .iter()
+        .map(|row| row_lines(row).max(1).min(u16::MAX as usize) as u16)
+        .collect::<Vec<_>>();
+    let gaps = rows
+        .iter()
+        .enumerate()
+        .map(|(index, _)| if index + 1 < rows.len() { row_gap } else { 0 })
+        .collect::<Vec<_>>();
+    (row_heights, gaps)
 }
 
 pub(super) fn agent_rows(

@@ -163,6 +163,8 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_surface_active: bool,
     /// Whether this shell wants host mouse capture without pane demand.
     pub(crate) shell_mouse_capture: bool,
+    /// Whether this shell advertised that it acts on activate-endpoint requests.
+    pub(crate) shell_activate_endpoint_supported: bool,
     /// Last host mouse capture mode sent to this client.
     pub(crate) host_mouse_capture_active: Option<bool>,
     /// Last SGR pixel provenance mode sent to this client.
@@ -255,6 +257,7 @@ impl ClientConnection {
             shell_deferred_navigation_request_id: None,
             shell_deferred_navigation_response: None,
             shell_uses_endpoint_keybindings: false,
+            shell_activate_endpoint_supported: false,
             writer,
         }
     }

@@ -1,0 +1,70 @@
+id = "ziki"
+version = "2026.08.27.1"
+min_engine_version = 1
+updated_at = "2026-08-27T00:00:00Z"
+aliases = ["herdr:ziki"]
+
+# Ziki (github.com/arrrrny/ziki) publishes its agent state on every transition
+# (contract specs/011-herdr-ziki-state-sync on the ziki repo):
+#   §3 screen marker on stdout, own line:  "[ziki-state: <state>] <message?>"
+#   §4 OSC title:                          \x1b]2;ziki:<state>\x07
+# The push API (§2, source "herdr:ziki") is the authoritative path; these rules
+# are the fallback when HERDR_PANE_ID is unset (screen/OSC-only mode).
+#
+# The OSC title always carries the current state, so OSC rules take the highest
+# priorities. Screen markers accumulate in the bottom buffer: the newest marker
+# sits lowest. Blocked and idle markers are terminal output (Ziki prints
+# nothing after them while it waits / finishes), so they match a tight
+# bottom_lines(4) window at high priority; the working marker is followed by
+# tool output, so it matches the wider whole_recent window at lower priority.
+# A stale blocked/idle marker leaves the 4-line window within a few output
+# lines and an older working marker never outranks a newer blocked/idle marker
+# in the window.
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1200
+region = "osc_title"
+visible_blocker = true
+contains = ["ziki:blocked"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+visible_working = true
+contains = ["ziki:working"]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 1000
+region = "osc_title"
+visible_idle = true
+contains = ["ziki:idle"]
+
+[[rules]]
+id = "screen_marker_blocked"
+state = "blocked"
+priority = 500
+region = "bottom_lines(4)"
+visible_blocker = true
+contains = ["[ziki-state: blocked]"]
+
+[[rules]]
+id = "screen_marker_idle"
+state = "idle"
+priority = 450
+region = "bottom_lines(4)"
+visible_idle = true
+contains = ["[ziki-state: idle]"]
+
+[[rules]]
+id = "screen_marker_working"
+state = "working"
+priority = 400
+region = "whole_recent"
+visible_working = true
+contains = ["[ziki-state: working]"]

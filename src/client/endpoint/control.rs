@@ -8,6 +8,7 @@ pub(crate) struct DecodedAgentViewProjection {
 
 pub(crate) enum EndpointControlMessage {
     HealthPong,
+    ActivateEndpoint(Box<crate::api::schema::ClientActivateEndpointParams>),
     AgentViewProjection(DecodedAgentViewProjection),
     AgentCompletions(crate::protocol::endpoint::EndpointAgentCompletions),
     Snapshot(Box<crate::protocol::ClientShellSnapshot>),
@@ -20,6 +21,11 @@ pub(crate) fn decode_endpoint_control(
 ) -> Result<EndpointControlMessage, String> {
     if kind == crate::protocol::endpoint::HEALTH_PONG_KIND {
         return Ok(EndpointControlMessage::HealthPong);
+    }
+    if kind == crate::protocol::endpoint::ACTIVATE_ENDPOINT_KIND {
+        return Ok(serde_json::from_str(data)
+            .map(|params| EndpointControlMessage::ActivateEndpoint(Box::new(params)))
+            .unwrap_or(EndpointControlMessage::Ignored));
     }
     if kind == crate::protocol::endpoint::AGENT_COMPLETIONS_KIND {
         return Ok(serde_json::from_str(data)
@@ -79,6 +85,34 @@ mod tests {
     fn unknown_optional_controls_are_ignored() {
         assert!(matches!(
             decode_endpoint_control("future.optional", "not json").unwrap(),
+            EndpointControlMessage::Ignored
+        ));
+    }
+
+    #[test]
+    fn activate_endpoint_control_round_trips_and_ignores_malformed_payloads() {
+        let params = crate::api::schema::ClientActivateEndpointParams {
+            machine: "mac-mini".into(),
+            target: crate::api::schema::ClientActivateEndpointTarget::Pane("w1D:p4Y".into()),
+        };
+        let crate::protocol::ServerMessage::EndpointControl { kind, data } =
+            crate::protocol::endpoint::activate_endpoint_message(&params).unwrap()
+        else {
+            panic!("expected activate endpoint control");
+        };
+        assert_eq!(kind, crate::protocol::endpoint::ACTIVATE_ENDPOINT_KIND);
+        let EndpointControlMessage::ActivateEndpoint(decoded) =
+            decode_endpoint_control(&kind, &data).unwrap()
+        else {
+            panic!("expected activate endpoint request");
+        };
+        assert_eq!(*decoded, params);
+        assert!(matches!(
+            decode_endpoint_control(
+                crate::protocol::endpoint::ACTIVATE_ENDPOINT_KIND,
+                "not json"
+            )
+            .unwrap(),
             EndpointControlMessage::Ignored
         ));
     }

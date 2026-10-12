@@ -795,16 +795,7 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
 fn sidebar_renders_local_and_saved_ssh_endpoints_with_status() {
     let (mut state, _) = state_with_remote();
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local"));
     assert!(text.contains("Build"));
     assert!(text.contains("remote-workspace"));
@@ -1285,16 +1276,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("○ Local · local agent"), "frame: {text}");
     assert!(text.contains("× Build · remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
@@ -1353,16 +1335,7 @@ fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     state.set_test_endpoint_agent_view(&endpoint_id, Some(view));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(!text.contains("Build · remote agent"), "frame: {text}");
 
@@ -1371,16 +1344,7 @@ fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     remote_surface.boot_id = "remote-boot".into();
     state.set_pane_surface(remote_surface);
     let frame = state.compose(100, 28).expect("remote endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(!text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
 }
@@ -1440,16 +1404,7 @@ fn current_workspace_or_blocked_keeps_foreign_attention_only() {
     state.set_test_endpoint_agent_view(&ClientEndpointId::Local, Some(view));
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(!text.contains("Build · remote idle"), "frame: {text}");
     assert!(text.contains("Build · remote blocked"), "frame: {text}");
@@ -1496,16 +1451,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
     );
 
     let frame = state.compose(100, 28).expect("combined endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
     assert!(text.contains("grouped"), "frame: {text}");
@@ -1582,16 +1528,7 @@ fn legacy_custom_views_keep_v1_per_endpoint_projection() {
     state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
 
     let frame = state.compose(100, 28).expect("legacy combined frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
 }
@@ -1634,16 +1571,7 @@ fn selected_custom_sort_orders_rendering_and_indexed_navigation() {
     state.set_test_endpoint_agent_view(&ClientEndpointId::Local, Some(view));
 
     let frame = state.compose(100, 28).expect("custom sorted frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
     assert!(
         text.find("Build · remote idle").expect("remote row")
             < text.find("Local · local blocked").expect("local row"),
@@ -1759,16 +1687,7 @@ fn aggregate_priority_uses_client_observed_recency_across_machines() {
     state.set_snapshot(Box::new(local));
     let frame_text = |state: &mut ClientShellState| {
         let frame = state.compose(100, 28).expect("combined endpoint frame");
-        frame
-            .cells
-            .chunks(frame.width as usize)
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.symbol.as_str())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        frame_rows(&frame).join("\n")
     };
     let text = frame_text(&mut state);
     assert!(
@@ -2222,16 +2141,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
 
     state.mark_endpoint_disconnected(&endpoint_id);
     let frame = state.compose(100, 28).expect("frozen endpoint frame");
-    let text = frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = frame_rows(&frame).join("\n");
 
     assert_eq!(state.pending_integration_installs, 0);
     assert_eq!(
@@ -2367,17 +2277,7 @@ fn navigator_uses_machine_parents_only_for_federated_clients() {
     local.set_pane_surface(surface());
     let frame = local.compose(100, 28).expect("local-only sidebar");
     assert!(local.hits.machines.is_empty());
-    assert!(!frame
-        .cells
-        .chunks(frame.width as usize)
-        .map(|row| {
-            row.iter()
-                .map(|cell| cell.symbol.as_str())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .contains(" machines"));
+    assert!(!frame_rows(&frame).join("\n").contains(" machines"));
     local.open_navigator_overlay();
     let ClientShellOverlay::Navigator(navigator) = local.overlay.as_ref().expect("navigator")
     else {
@@ -2837,5 +2737,208 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
             endpoint_id: activated,
             target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
         }] if activated == &endpoint_id && workspace_id == "ws_1"
+    ));
+}
+
+fn activate_request(
+    machine: &str,
+    target: crate::api::schema::ClientActivateEndpointTarget,
+) -> crate::api::schema::ClientActivateEndpointParams {
+    crate::api::schema::ClientActivateEndpointParams {
+        machine: machine.into(),
+        target,
+    }
+}
+
+#[test]
+fn activate_endpoint_request_switches_machine_and_focuses_the_target() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    for target in [
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+        ClientActivateEndpointTarget::Workspace("ws_1".into()),
+    ] {
+        let expected = match &target {
+            ClientActivateEndpointTarget::Pane(pane_id) => {
+                ClientEndpointFocusTarget::Pane(pane_id.clone())
+            }
+            ClientActivateEndpointTarget::Tab(tab_id) => {
+                ClientEndpointFocusTarget::Tab(tab_id.clone())
+            }
+            ClientActivateEndpointTarget::Workspace(workspace_id) => {
+                ClientEndpointFocusTarget::Workspace(workspace_id.clone())
+            }
+        };
+        let outcome = state.activate_endpoint_request(&activate_request("Build", target));
+        assert!(
+            matches!(
+                outcome.actions.as_slice(),
+                [ClientShellAction::ActivateEndpoint { endpoint_id, target: Some(target) }]
+                    if endpoint_id == &remote && target == &expected
+            ),
+            "{:?}",
+            outcome.actions
+        );
+    }
+}
+
+#[test]
+fn activate_endpoint_request_accepts_profile_ids() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    let ClientEndpointId::Ssh(profile_id) = &remote else {
+        panic!("expected an SSH endpoint");
+    };
+    let outcome = state.activate_endpoint_request(&activate_request(
+        profile_id.as_str(),
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint { endpoint_id, .. }] if endpoint_id == &remote
+    ));
+}
+
+#[test]
+fn activate_endpoint_request_focuses_in_place_on_the_active_machine() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    assert!(state.activate_endpoint_projection(&remote));
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::Endpoint { endpoint_id, request, .. }]
+            if endpoint_id == &remote
+                && matches!(
+                    &request.method,
+                    crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_1"
+                )
+    ));
+}
+
+#[test]
+fn activate_endpoint_request_reports_an_offline_machine_without_navigating() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, remote) = state_with_remote();
+    state.set_endpoint_status(&remote, ClientEndpointStatus::Reconnecting);
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(outcome.actions.is_empty());
+    assert!(outcome.repaint);
+    let notice = state
+        .visible_endpoint_notice
+        .take()
+        .expect("endpoint notice");
+    assert!(
+        notice.body.contains("Build is unavailable"),
+        "{}",
+        notice.body
+    );
+}
+
+#[test]
+fn activate_endpoint_request_ignores_unknown_and_ambiguous_machines() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, _remote) = state_with_remote();
+    let unknown = state.activate_endpoint_request(&activate_request(
+        "missing",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(unknown.actions.is_empty());
+    assert!(!unknown.repaint);
+
+    let duplicate = SavedSshEndpoint::new("Build", "other@build.example", "agents").unwrap();
+    state.set_endpoint_catalog(&[remote_profile(), duplicate]);
+    let ambiguous = state.activate_endpoint_request(&activate_request(
+        "Build",
+        ClientActivateEndpointTarget::Pane("pane_1".into()),
+    ));
+    assert!(ambiguous.actions.is_empty());
+    assert!(!ambiguous.repaint);
+}
+
+#[test]
+fn activate_endpoint_request_routes_an_active_local_selection_through_the_runtime() {
+    use crate::api::schema::ClientActivateEndpointTarget;
+
+    let (mut state, _remote) = state_with_remote();
+    assert!(state.multi_endpoint_active());
+    let outcome = state.activate_endpoint_request(&activate_request(
+        "Local",
+        ClientActivateEndpointTarget::Tab("tab_1".into()),
+    ));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint { endpoint_id, target: Some(..) }]
+            if endpoint_id == &ClientEndpointId::Local
+    ));
+}
+
+#[derive(Clone)]
+struct GlueEndpointTransport(std::sync::Arc<std::sync::Mutex<Vec<crate::protocol::ClientMessage>>>);
+
+impl crate::client::endpoint::EndpointTransport for GlueEndpointTransport {
+    fn send(&mut self, message: &crate::protocol::ClientMessage) -> std::io::Result<()> {
+        self.0.lock().unwrap().push(message.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn activate_endpoint_control_schedules_the_endpoint_switch_for_a_live_shell() {
+    use crate::api::schema::{ClientActivateEndpointParams, ClientActivateEndpointTarget};
+
+    let mut state = crate::client::ClientState::test_new();
+    let profile = remote_profile();
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
+    {
+        let shell = state.shell.as_mut().expect("shell mode");
+        shell.set_endpoint_catalog(std::slice::from_ref(&profile));
+        shell.set_endpoint_status(&remote, ClientEndpointStatus::Online);
+        shell.set_endpoint_snapshot(&remote, Box::new(snapshot()));
+    }
+    let mut endpoints = crate::client::endpoint::EndpointRegistry::new(
+        GlueEndpointTransport(std::sync::Arc::new(std::sync::Mutex::new(Vec::new()))),
+        1,
+        crate::client::endpoint::EndpointNegotiation::new(Vec::new(), Vec::new()),
+    );
+    let mut pending_activation = None;
+    let mut endpoint_commands = crate::client::endpoint_commands::EndpointCommands::default();
+    let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
+    let mut scheduled_activation = None;
+
+    let detached = crate::client::shell_runtime::apply_activate_endpoint_request(
+        &mut state,
+        &ClientActivateEndpointParams {
+            machine: "Build".into(),
+            target: ClientActivateEndpointTarget::Pane("pane_1".into()),
+        },
+        &mut endpoints,
+        &mut pending_activation,
+        &mut endpoint_commands,
+        &mut prefix_input_source,
+        &mut scheduled_activation,
+    )
+    .unwrap();
+
+    assert!(!detached);
+    assert!(matches!(
+        scheduled_activation,
+        Some(crate::client::ClientLoopEvent::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+            force: false,
+        }) if endpoint_id == remote && pane_id == "pane_1"
     ));
 }

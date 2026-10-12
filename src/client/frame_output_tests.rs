@@ -147,6 +147,10 @@ mod local_files {
             let first_text = std::str::from_utf8(&first).unwrap();
             assert!(first_text.contains("a=q,t=t"));
             assert!(first_text.contains("a=t,t=d"));
+            // The probe must be cleaned up by id. `d=A` ignores `i=` and
+            // deletes every placement visible on the host screen.
+            assert!(first_text.contains("a=d,d=I,i="));
+            assert!(!first_text.contains("d=A"));
             let probe = command_path(&first, "a=q,");
             assert_eq!(std::fs::read(&probe).unwrap().len(), 4);
             let mut waiting = Vec::new();
