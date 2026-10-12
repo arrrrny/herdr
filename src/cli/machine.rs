@@ -270,10 +270,14 @@ fn default_label(target: &str, session: &str) -> String {
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = match (url, host.strip_prefix('[')) {
-        (Some(_), Some(bracketed)) => bracketed.split_once(']').map_or(host, |(ip, _)| ip),
-        (Some(_), None) => host.split_once(':').map_or(host, |(host, _)| host),
-        (None, _) => host,
+    // Both spellings carry the same host, so both must normalize the same way:
+    // `ssh://[::1]:2222` and the scp-style `[::1]:2222` are one machine, and
+    // `[::1]` must reduce to the bare address rather than keeping its brackets.
+    // Previously the bracket/port rules only applied to the `ssh://` spelling,
+    // so the two forms produced different labels for the same host.
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(ip, _)| ip),
+        None => host.split_once(':').map_or(host, |(host, _)| host),
     };
     if session == crate::session::DEFAULT_SESSION_NAME {
         host.to_owned()
@@ -638,8 +642,41 @@ mod tests {
             ("ssh://dev@[::1]:2222", "agents", "::1/agents"),
             ("ssh://dev@workbox/", "default", "workbox"),
             ("ssh://dev@workbox:2222/", "agents", "workbox/agents"),
+            // The scp-style spelling names the same hosts as the `ssh://`
+            // spelling, so it must derive the same label rather than keeping
+            // brackets and the port.
+            ("dev@workbox:2222", "default", "workbox"),
+            ("dev@workbox:2222", "agents", "workbox/agents"),
+            ("dev@[::1]:2222", "default", "::1"),
+            ("dev@[::1]:2222", "agents", "::1/agents"),
+            ("[::1]:2222", "default", "::1"),
+            // A bare IPv6 address with no port, in both spellings.
+            ("ssh://dev@[::1]", "default", "::1"),
+            ("dev@[::1]", "default", "::1"),
+            // A bare bracketed host with nothing after the bracket.
+            ("dev@[workbox]", "default", "workbox"),
         ] {
             assert_eq!(default_label(target, session), label, "{target} {session}");
+        }
+    }
+
+    #[test]
+    fn default_label_agrees_across_target_spellings() {
+        // Whatever the label rules are, the two spellings of one target must
+        // not drift apart, or the same machine ends up listed twice.
+        for (url, scp) in [
+            ("ssh://dev@workbox:2222", "dev@workbox:2222"),
+            ("ssh://dev@[::1]:2222", "dev@[::1]:2222"),
+            ("ssh://dev@[::1]", "dev@[::1]"),
+            ("ssh://dev@workbox", "dev@workbox"),
+        ] {
+            for session in [crate::session::DEFAULT_SESSION_NAME, "agents"] {
+                assert_eq!(
+                    default_label(url, session),
+                    default_label(scp, session),
+                    "{url} vs {scp} for session {session}"
+                );
+            }
         }
     }
 

@@ -326,9 +326,13 @@ async function tui(api) {
       ctx.statuses = new Map(Object.entries(statuses)
         .filter(([id, status]) => !ctx.deleted.has(id) && (status.type === "busy" || status.type === "retry")));
       ctx.blockers = blockers;
-      // Preserve deltas until hydration succeeds, including retry backoff:
-      // a later snapshot must not revive a replied or cancelled request.
-      for (const event of ctx.events) apply(ctx, event);
+      // Replay the buffered deltas once per attempt, then drop them: they have
+      // been applied, and keeping them while a persistently failing hydrate
+      // retries would grow the buffer without bound. Clearing before the
+      // replay keeps anything that arrives later in the fresh buffer.
+      const pending = ctx.events;
+      ctx.events = [];
+      for (const event of pending) apply(ctx, event);
       ctx.hydrated = validated;
       if (!validated) ctx.retryAt = Date.now() + 500;
       reconcile(ctx);

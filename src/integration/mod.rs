@@ -20,8 +20,9 @@ pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
-    experimental_letta_integration_status, installed_integration_statuses,
-    integration_recommendations, integration_target_label, print_outdated_update_notice,
+    cached_login_shell_path, combined_login_shell_path, experimental_letta_integration_status,
+    installed_integration_statuses, integration_recommendations, integration_target_label,
+    print_outdated_update_notice,
 };
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,

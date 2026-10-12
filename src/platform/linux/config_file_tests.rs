@@ -71,11 +71,11 @@ fn config_metadata_preserves_ownership_and_acl_without_inheriting_extra_access()
         }
         set_attribute(&input, c"user.herdr-test", b"preserve this attribute");
         let original = input.metadata().unwrap();
-        drop(create_config_temporary(&target, true).unwrap());
-        let output = std::fs::File::open(&target).unwrap();
+        let output = create_config_temporary(&target, true).unwrap();
         // Model a default ACL inherited from the destination's parent directory.
         set_attribute(&output, c"system.posix_acl_access", &acl);
-        write_config_temporary(Some(&source), &target, b"new").unwrap();
+        write_config_temporary(Some(&source), output, b"new").unwrap();
+        let output = std::fs::File::open(&target).unwrap();
         let actual = output.metadata().unwrap();
         assert_eq!(
             (actual.uid(), actual.gid(), actual.mode()),

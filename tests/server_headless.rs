@@ -623,6 +623,14 @@ fn server_stop_request_logs_its_caller() {
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
 
+    // The harness holds the PTY master open but never reads it. On macOS the
+    // session-leader exit path drains the terminal output queue, so with an
+    // unread master the server blocks in exit past wait_for_exit's budget
+    // (the ready message sits in the queue). Closing the master marks the
+    // terminal gone, as server_survives_hangup_and_logs_why_it_stops does,
+    // which lets the exit complete promptly.
+    spawned.close_master();
+
     let mut stream = UnixStream::connect(&api_socket).unwrap();
     writeln!(
         stream,

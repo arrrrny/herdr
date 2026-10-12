@@ -3384,8 +3384,12 @@ pub fn selectWordBounded(
             const rac = p.rowAndCell();
             const cell = rac.cell;
 
-            // Wide-cell spacers are part of the same displayed word.
-            if (cell.wide == .spacer_tail or cell.wide == .spacer_head) {
+            // Wide-cell spacers are part of the same displayed word. Going
+            // right a spacer head is reached before its head on the next
+            // wrapped row, so only a tail can be accepted without checking
+            // the cell it belongs to first.
+            if (cell.wide == .spacer_head) continue;
+            if (cell.wide == .spacer_tail) {
                 prev = p;
                 if (p.x == p.node.cols() - 1 and !rac.row.wrap) break :end p;
                 continue;
@@ -3430,7 +3434,12 @@ pub fn selectWordBounded(
                 break :start prev;
             }
 
-            if (cell.wide == .spacer_tail or cell.wide == .spacer_head) {
+            // Wide-cell spacers are part of the same displayed word. Going
+            // left a spacer tail is reached before its head, so it cannot be
+            // accepted until that head is validated; a spacer head's head was
+            // already visited.
+            if (cell.wide == .spacer_tail) continue;
+            if (cell.wide == .spacer_head) {
                 prev = p;
                 continue;
             }

@@ -242,6 +242,8 @@ impl ClientShellState {
                     effects.push(ClientShellNotificationEffect::System {
                         title: pending.event.title,
                         body: pending.event.body,
+                        #[cfg(not(windows))]
+                        click_target: pending.event.pane_id.clone(),
                         #[cfg(windows)]
                         target,
                     });

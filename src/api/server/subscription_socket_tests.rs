@@ -271,27 +271,40 @@ fn subscriptions_drain_retained_bursts_without_per_event_poll_delay() {
 
 #[test]
 fn subscriptions_report_history_loss_before_sending_a_partial_stream() {
-    assert_subscription_history_loss(false);
+    assert_subscription_history_loss();
 }
 
 #[test]
-fn subscriptions_report_history_loss_before_initial_agent_status() {
-    assert_subscription_history_loss(true);
-}
-
-fn assert_subscription_history_loss(agent_status: bool) {
+fn subscriptions_seed_agent_status_after_setup_probe() {
     let mut test = SocketTest::new();
     let mut client = test.connect();
-    let subscriptions = if agent_status {
+    client.subscribe(
+        "agent-status",
         json!([{
             "type": "pane.agent_status_changed",
             "pane_id": "pane_1",
             "agent_status": "working"
-        }])
-    } else {
-        json!([{"type": "workspace.renamed"}, output_subscription()])
-    };
-    client.subscribe("history-gap", subscriptions);
+        }]),
+    );
+    let probe = test.app_request();
+    assert!(probe.request.id.ends_with(":probe"));
+    for index in 0..600 {
+        test.hub.push(renamed_event(index));
+    }
+    reply_to_probe(probe);
+    client.assert_started("agent-status");
+    let event = client.response();
+    assert_eq!(event["event"], "pane.agent_status_changed");
+    assert_eq!(event["data"]["agent_status"], "working");
+}
+
+fn assert_subscription_history_loss() {
+    let mut test = SocketTest::new();
+    let mut client = test.connect();
+    client.subscribe(
+        "history-gap",
+        json!([{"type": "workspace.renamed"}, output_subscription()]),
+    );
     // Hold the setup probe after the server pins its subscription cursor.
     let probe = test.app_request();
     assert!(probe.request.id.ends_with(":probe"));

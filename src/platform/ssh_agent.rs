@@ -148,11 +148,17 @@ impl SshAgentRegistry {
 impl State {
     fn ensure_owned(&self) -> io::Result<()> {
         if let Some(identity) = self.identity {
-            let metadata = fs::symlink_metadata(&self.path)?;
-            if identity != (metadata.dev(), metadata.ino()) {
-                return Err(io::Error::other(
-                    "SSH agent address belongs to a replacement server",
-                ));
+            match fs::symlink_metadata(&self.path) {
+                // Removed underneath us (session cleanup, a tmp reaper, a stray
+                // rm): republish instead of disabling refresh for good.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+                Ok(metadata) if identity != (metadata.dev(), metadata.ino()) => {
+                    return Err(io::Error::other(
+                        "SSH agent address belongs to a replacement server",
+                    ));
+                }
+                Ok(_) => {}
             }
         }
         Ok(())
