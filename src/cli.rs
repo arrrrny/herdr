@@ -3,10 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::api::client::{ApiClient, ApiClientError};
-use crate::api::schema::{
-    AgentStatus, ClientWindowTitleSetParams, EmptyParams, Method, PaneAgentState, ReadFormat,
-    ReadSource, Request, SplitDirection,
-};
+use crate::api::schema::{Method, Request};
 
 macro_rules! print {
     ($($arg:tt)*) => {{
@@ -22,27 +19,29 @@ macro_rules! println {
     }};
 }
 
-mod agent;
+pub(crate) mod agent;
 mod api;
 mod app;
 mod badge;
 mod completion;
 mod integration;
 mod machine;
-mod notification;
+pub(crate) mod notification;
 mod notification_click;
-mod pane;
-mod plugin;
+pub(crate) mod pane;
+pub(crate) mod plugin;
+pub(crate) mod projection;
 mod protocol_guard;
-mod runtime;
 mod server;
 mod server_not_running;
 mod spec;
 mod status;
-mod tab;
+pub(crate) mod tab;
 mod target;
+mod title;
 mod workspace;
-mod worktree;
+pub(crate) mod workspace_bindings;
+pub(crate) mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
     "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
@@ -121,6 +120,13 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         return Ok(CommandOutcome::Handled(0));
     }
 
+    if args.len() == 2 {
+        if let Some(group) = api_group(command) {
+            eprintln!("{}", projection::group_commands(&group));
+            return Ok(CommandOutcome::Handled(2));
+        }
+    }
+
     let exit_code = match command {
         "server" => {
             let Some(exit_code) = server::run_server_command(&args[2..])? else {
@@ -150,6 +156,20 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     };
 
     Ok(CommandOutcome::Handled(exit_code))
+}
+
+/// API-backed command groups, which list their commands when run without one.
+fn api_group(name: &str) -> Option<clap::Command> {
+    Some(match name {
+        "workspace" => workspace_bindings::command(),
+        "worktree" => worktree::command(),
+        "tab" => tab::command(),
+        "notification" => notification::command(),
+        "agent" => agent::command(),
+        "pane" => pane::command(),
+        "plugin" => plugin::command(),
+        _ => return None,
+    })
 }
 
 fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
@@ -700,40 +720,7 @@ fn parse_terminal_dimension(raw: &str, flag: &str) -> std::io::Result<u16> {
 }
 
 fn terminal_title(args: &[String]) -> std::io::Result<i32> {
-    match args.first().map(|arg| arg.as_str()) {
-        Some("set") => {
-            if args.len() != 2 {
-                eprintln!("usage: herdr terminal title set <title>");
-                return Ok(2);
-            }
-            print_response(&send_request(&Request {
-                id: "cli:terminal:title:set".into(),
-                method: Method::ClientWindowTitleSet(ClientWindowTitleSetParams {
-                    title: args[1].clone(),
-                }),
-            })?)
-        }
-        Some("clear") => {
-            if args.len() != 1 {
-                eprintln!("usage: herdr terminal title clear");
-                return Ok(2);
-            }
-            print_response(&send_request(&Request {
-                id: "cli:terminal:title:clear".into(),
-                method: Method::ClientWindowTitleClear(EmptyParams::default()),
-            })?)
-        }
-        Some("help" | "--help" | "-h") => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
-            Ok(0)
-        }
-        _ => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
-            Ok(2)
-        }
-    }
+    title::run(args)
 }
 
 pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(String, bool), i32> {
@@ -766,6 +753,27 @@ pub(super) fn print_response(response: &serde_json::Value) -> std::io::Result<i3
 
     println!("{}", serde_json::to_string(response).unwrap());
     Ok(0)
+}
+
+/// Sends a parsed request and prints its JSON response; parse failures never connect.
+fn run_json_request(request: Result<Request, projection::ParseError>) -> std::io::Result<i32> {
+    let request = match request {
+        Ok(request) => request,
+        Err(projection::ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(projection::ParseError::Io(error)) => return Err(error),
+        Err(projection::ParseError::Clap(error)) => return print_clap_error(&error),
+    };
+    print_response(&send_request(&request)?)
+}
+
+/// Prints a Clap diagnostic or help page and returns its exit code.
+pub(super) fn print_clap_error(error: &clap::Error) -> std::io::Result<i32> {
+    crate::platform::begin_cli_output();
+    error.print()?;
+    Ok(error.exit_code())
 }
 
 pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
@@ -883,118 +891,6 @@ pub(super) fn normalize_tab_id(value: &str) -> String {
 
 pub(super) fn normalize_pane_id(value: &str) -> String {
     value.to_string()
-}
-
-/// Reads `HERDR_PANE_ID`, returning `None` when unset or empty. External CLI
-/// callers (processes not running inside a managed Herdr pane) have no such
-/// variable, and write commands must not silently resolve `--current` or an
-/// omitted target to the UI-focused pane in that context.
-pub(super) fn caller_pane_id() -> Option<String> {
-    std::env::var("HERDR_PANE_ID")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-}
-
-/// Resolve the pane target for a WRITE command that must not silently act on the
-/// human's focused pane when invoked from outside a managed pane.
-///
-/// Selectors (at most one, read from the front of `args`):
-/// - `--pane ID` or a bare positional `ID` => explicit target.
-/// - `--current` => the calling pane from `HERDR_PANE_ID`.
-///
-/// A missing target is only allowed when `HERDR_PANE_ID` is set, in which case
-/// it resolves to the calling pane (equivalent to `--current`). When
-/// `HERDR_PANE_ID` is unset, both `--current` and an omitted target are hard
-/// errors so an external caller must name its target explicitly.
-///
-/// Returns the resolved target pane id and the number of leading args consumed
-/// by the selector (`0` when the target was omitted and resolved from the env).
-pub(super) fn parse_write_pane_target(
-    args: &[String],
-    env_pane_id: Option<&str>,
-) -> Result<(String, usize), String> {
-    match args.first().map(String::as_str) {
-        Some("--current") => {
-            let id = env_pane_id
-                .map(normalize_pane_id)
-                .ok_or("--current requires HERDR_PANE_ID")?;
-            Ok((id, 1))
-        }
-        Some("--pane") => {
-            let Some(value) = args.get(1) else {
-                return Err("missing value for --pane".into());
-            };
-            Ok((normalize_pane_id(value), 2))
-        }
-        Some(first) if first.starts_with("--") => Err(format!("unknown option: {first}")),
-        Some(first) => Ok((normalize_pane_id(first), 1)),
-        None => {
-            let Some(env) = env_pane_id else {
-                return Err(
-                    "write commands require an explicit target (--pane ID|--current); --current requires HERDR_PANE_ID"
-                        .into(),
-                );
-            };
-            Ok((normalize_pane_id(env), 0))
-        }
-    }
-}
-
-pub(super) fn parse_split_direction(value: &str) -> std::io::Result<SplitDirection> {
-    match value {
-        "right" => Ok(SplitDirection::Right),
-        "down" => Ok(SplitDirection::Down),
-        _ => Err(std::io::Error::other(format!(
-            "invalid split direction: {value}"
-        ))),
-    }
-}
-
-pub(super) fn parse_read_source(value: &str) -> std::io::Result<ReadSource> {
-    match value {
-        "visible" => Ok(ReadSource::Visible),
-        "recent" => Ok(ReadSource::Recent),
-        "recent-unwrapped" | "recent_unwrapped" => Ok(ReadSource::RecentUnwrapped),
-        "detection" => Ok(ReadSource::Detection),
-        _ => Err(std::io::Error::other(format!(
-            "invalid read source: {value}"
-        ))),
-    }
-}
-
-pub(super) fn parse_read_format(value: &str) -> std::io::Result<ReadFormat> {
-    match value {
-        "text" => Ok(ReadFormat::Text),
-        "ansi" => Ok(ReadFormat::Ansi),
-        _ => Err(std::io::Error::other(format!(
-            "invalid read format: {value}"
-        ))),
-    }
-}
-
-fn parse_agent_status(value: &str) -> std::io::Result<AgentStatus> {
-    match value {
-        "idle" => Ok(AgentStatus::Idle),
-        "working" => Ok(AgentStatus::Working),
-        "blocked" => Ok(AgentStatus::Blocked),
-        "done" => Ok(AgentStatus::Done),
-        "unknown" => Ok(AgentStatus::Unknown),
-        _ => Err(std::io::Error::other(format!(
-            "invalid agent status: {value} (expected idle, working, blocked, done, or unknown)"
-        ))),
-    }
-}
-
-pub(super) fn parse_pane_agent_state(value: &str) -> std::io::Result<PaneAgentState> {
-    match value {
-        "idle" => Ok(PaneAgentState::Idle),
-        "working" => Ok(PaneAgentState::Working),
-        "blocked" => Ok(PaneAgentState::Blocked),
-        "unknown" => Ok(PaneAgentState::Unknown),
-        _ => Err(std::io::Error::other(format!(
-            "invalid pane agent state: {value} (expected idle, working, blocked, or unknown)"
-        ))),
-    }
 }
 
 pub(super) fn parse_u32_flag(flag: &str, value: &str) -> std::io::Result<u32> {

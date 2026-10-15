@@ -1,13 +1,13 @@
 //! Terminal setup and restoration for the rendered client.
 
 use std::io::{self, Write as _};
-#[cfg(unix)]
+#[cfg(not(windows))]
 use std::os::fd::AsRawFd as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
-#[cfg(unix)]
+#[cfg(not(windows))]
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -149,12 +149,12 @@ pub(super) struct TerminalGuard {
     restore_windows_input_mode: Arc<WindowsInputModeRestore>,
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 const HOST_CAPABILITY_QUERY_TIMEOUT: Duration = Duration::from_millis(250);
-#[cfg(unix)]
+#[cfg(not(windows))]
 const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 #[derive(Default)]
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
@@ -170,7 +170,7 @@ pub(super) struct HostTerminalProbe {
     pub(super) sgr_pixel_mouse: Option<bool>,
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn query_host_capabilities(query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
     const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[c";
     const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[c";
@@ -249,7 +249,7 @@ fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalPr
     }
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn host_escape_disambiguation_confirmed(responses: &HostKeyboardProbeResponses) -> bool {
     responses.primary_device_attributes
         && responses
@@ -257,7 +257,7 @@ fn host_escape_disambiguation_confirmed(responses: &HostKeyboardProbeResponses) 
             .is_some_and(|flags| flags & 0b0000_0001 != 0)
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn consume_host_keyboard_probe_responses(
     buffered_input: &mut Vec<u8>,
     responses: &mut HostKeyboardProbeResponses,
@@ -354,7 +354,7 @@ fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
     (fields.next().is_none() && status <= 4).then_some(status)
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     if bytes.first() != Some(&0x1b) {
         return None;
@@ -382,7 +382,7 @@ fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     Some(None)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn query_host_capabilities(_query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
     (HostTerminalProbe::default(), Vec::new())
 }
@@ -993,7 +993,7 @@ mod tests {
         output
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_keyboard_protocol_refresh_resends_the_setup_modes() {
         // Focus-in on a kitty host: replace Herdr's stack entry, keep paste on.
@@ -1125,7 +1125,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_capability_probe_accepts_only_usable_sgr_pixel_mouse_states() {
         for status in 0..=4 {
@@ -1167,7 +1167,7 @@ mod tests {
         assert_eq!(buffered, b"aPtyped");
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_requires_disambiguation_bit_and_device_attributes() {
         for (flags, expected) in [(0, false), (2, false), (7, true)] {
@@ -1181,7 +1181,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_requires_flags_before_device_attributes() {
         let mut buffered = b"\x1b[?1;2c\x1b[?7uinput".to_vec();
@@ -1194,7 +1194,7 @@ mod tests {
         assert_eq!(buffered, b"input");
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_preserves_response_shaped_payloads() {
         let opaque =
@@ -1209,7 +1209,7 @@ mod tests {
         assert_eq!(buffered, opaque);
     }
 
-    #[cfg(unix)]
+    #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_preserves_malformed_responses() {
         let mut buffered = b"a\x1b[?7;1ub\x1b[?65536uc\x1b[?1016;5$y\x1b[?1006;2$y".to_vec();

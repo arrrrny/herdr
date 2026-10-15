@@ -131,6 +131,12 @@ fn spawn_server(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    // The fork's server binds a Ziki agent-state push listener on
+    // 127.0.0.1:7878 by default. Leave it at the default here and this
+    // isolated server races whatever herdr already holds that port on the
+    // machine, so unrelated tests in this file inherit a bind failure. An
+    // empty value disables the listener (resolved_http_push_listen_addr).
+    cmd.env("HERDR_API_LISTEN_ADDR", "");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
