@@ -355,6 +355,14 @@ fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
 }
 
 #[cfg(unix)]
+fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
+    let mut fields = body.split(|byte| *byte == b';');
+    (fields.next()? == b"1016").then_some(())?;
+    let status = std::str::from_utf8(fields.next()?).ok()?.parse().ok()?;
+    (fields.next().is_none() && status <= 4).then_some(status)
+}
+
+#[cfg(unix)]
 fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     if bytes.first() != Some(&0x1b) {
         return None;
@@ -985,6 +993,35 @@ mod tests {
     }
 
     #[cfg(not(windows))]
+    fn refresh_bytes(guard: &TerminalGuard, report_all_keys: bool, focus: bool) -> Vec<u8> {
+        let mut output = Vec::new();
+        guard
+            .refresh_host_keyboard_protocol(&mut output, report_all_keys, focus)
+            .unwrap();
+        output
+    }
+
+    #[cfg(unix)]
+    fn refresh_test_guard(
+        kitty_confirmed: bool,
+        client_protocols: bool,
+        modify_other_keys_sequence: Option<&'static [u8]>,
+    ) -> TerminalGuard {
+        TerminalGuard {
+            host_escape_disambiguation_active: kitty_confirmed,
+            host_sgr_pixel_mouse: None,
+            buffered_host_input: Vec::new(),
+            reset_keyboard_enhancements: client_protocols,
+            reset_modify_other_keys: modify_other_keys_sequence.is_some(),
+            modify_other_keys_sequence,
+            reset_host_color_scheme_reports: false,
+            restore_claimed: Arc::new(AtomicBool::new(false)),
+            // Keep Drop from writing restore sequences to the test's stdout.
+            restored: true,
+        }
+    }
+
+    #[cfg(unix)]
     fn refresh_bytes(guard: &TerminalGuard, report_all_keys: bool, focus: bool) -> Vec<u8> {
         let mut output = Vec::new();
         guard
