@@ -347,7 +347,10 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
 ///
 /// The prefix is part of the command the pane's shell runs, so the agent
 /// inherits the priority before it forks any child.
-pub(crate) fn agent_nice_prefix(nice: i32) -> Vec<String> {
+///
+/// GNU `nice -n` sets the priority outright, so the requested value is passed
+/// through unchanged.
+pub(crate) fn agent_nice_prefix(nice: i32, _current_priority: Option<i32>) -> Vec<String> {
     if nice == 0 {
         return Vec::new();
     }
@@ -2471,18 +2474,28 @@ mod tests {
     #[test]
     fn the_priority_prefix_precedes_the_agent_executable() {
         assert_eq!(
-            super::agent_nice_prefix(19),
+            super::agent_nice_prefix(19, Some(0)),
             vec!["nice".to_string(), "-n".to_string(), "19".to_string()]
         );
         assert_eq!(
-            super::agent_nice_prefix(-20),
+            super::agent_nice_prefix(-20, Some(0)),
             vec!["nice".to_string(), "-n".to_string(), "-20".to_string()]
         );
     }
 
     #[test]
+    fn the_priority_prefix_ignores_the_caller_priority() {
+        // GNU `nice -n` sets the priority outright, so the caller's priority
+        // does not change the requested value.
+        assert_eq!(
+            super::agent_nice_prefix(19, Some(-10)),
+            vec!["nice".to_string(), "-n".to_string(), "19".to_string()]
+        );
+    }
+
+    #[test]
     fn a_zero_priority_produces_no_prefix() {
-        assert!(super::agent_nice_prefix(0).is_empty());
+        assert!(super::agent_nice_prefix(0, Some(0)).is_empty());
     }
 
     #[test]

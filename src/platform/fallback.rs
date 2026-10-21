@@ -183,7 +183,7 @@ pub(crate) fn interactive_shell_command(_argv: &[String], _shell_name: &str) -> 
 }
 
 /// Unsupported platform stub: no Unix scheduling priority, so no prefix.
-pub(crate) fn agent_nice_prefix(_nice: i32) -> Vec<String> {
+pub(crate) fn agent_nice_prefix(_nice: i32, _current_priority: Option<i32>) -> Vec<String> {
     Vec::new()
 }
 

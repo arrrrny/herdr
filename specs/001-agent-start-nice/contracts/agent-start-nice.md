@@ -32,6 +32,8 @@ herdr agent start <NAME> --kind <KIND> --pane <ID> [--timeout MS] [--nice N] [--
 - Negative values require elevated privileges. The operating system refuses
   them for an unprivileged Herdr, and the refusal is surfaced as the launch
   error.
+- The agent runs at exactly the requested priority, on every platform that
+  has a Unix scheduling priority.
 
 **Trailing arguments**: the priority argument is parsed before the `--`
 separator. Agent arguments after `--` are forwarded to the agent executable
@@ -105,9 +107,16 @@ behavior.
 
 ## 4. Platform behavior
 
-| Platform      | Launch line with a requested priority | Reported priority |
-| ------------- | ------------------------------------ | ----------------- |
-| Linux         | gains a priority prefix              | reported          |
-| macOS         | gains a priority prefix              | reported          |
-| Windows       | unchanged                            | absent            |
-| other         | unchanged                            | absent            |
+| Platform      | Launch line with a requested priority      | Reported priority |
+| ------------- | ----------------------------------------- | ----------------- |
+| Linux         | gains a priority prefix                   | reported          |
+| macOS         | gains a priority prefix                   | reported          |
+| Windows       | unchanged                                 | absent            |
+| other         | unchanged                                 | absent            |
+
+**The requested priority is the priority the agent runs at**, on every
+platform above that reports one. Where the platform's priority program sets
+the priority outright, the requested value is passed through. Where it
+adjusts the caller's priority instead, the launch line carries the difference
+between the requested priority and the priority the pane's shell already
+runs at, so the agent still ends up at the requested priority.

@@ -571,7 +571,7 @@ Herdr can start Agents at a specific CPU scheduling priority:
 nice = 19
 ```
 
-The priority becomes part of the launch line, so the Agent inherits it before it forks any child and every descendant keeps it. `herdr agent start --nice N` overrides this default for a single launch, and an explicit `--nice 0` overrides it as well. Values run from -20 (most aggressive) to 19 (most deferred); 0 leaves the launch line unchanged. Negative values need elevated privileges, and the priority is ignored on platforms without a Unix scheduling priority. An out-of-range value is reported as a configuration diagnostic and falls back to 0.
+The priority becomes part of the launch line, so the Agent inherits it before it forks any child and every descendant keeps it. The Agent ends up at exactly the configured priority: on macOS, whose `nice` adjusts the caller's priority instead of setting it, Herdr compensates for the priority the pane's shell already runs at. `herdr agent start --nice N` overrides this default for a single launch, and an explicit `--nice 0` overrides it as well. Values run from -20 (most aggressive) to 19 (most deferred); 0 leaves the launch line unchanged. Negative values need elevated privileges, and the priority is ignored on platforms without a Unix scheduling priority. An out-of-range value is reported as a configuration diagnostic and falls back to 0.
 
 ## IME cursor tracking
 

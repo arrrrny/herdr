@@ -210,11 +210,60 @@ cargo nextest run --locked -E 'binary(agent_priority)'
 The same run with `SSH_AUTH_SOCK` removed from the whole environment also
 passes, which confirms the cause.
 
+## Cycle 10 — the requested priority must be the priority the agent runs at
+
+The macOS CI job failed on the feature's own acceptance test:
+
+```
+thread 'agent_start_applies_a_requested_priority' panicked at tests/agent_priority.rs:377:5:
+assertion `left == right` failed
+  left: Some(9)
+ right: Some(19)
+```
+
+The test passed on a developer machine and failed on the runner. The cause is
+a platform difference in the priority program itself, measured on both:
+
+```
+/usr/bin/nice -n 5 /bin/sh -c '/usr/bin/nice -n 19 ...'   ->  20
+/usr/bin/nice -n 5 /bin/sh -c '/usr/bin/nice -n 3 ...'    ->   8
+```
+
+macOS `nice -n` *adjusts* the caller's priority, while GNU `nice -n` sets it
+outright. The runner's processes start at a priority of -10, so a request for
+19 landed on 9. The operator asked for a priority, not for an adjustment, and
+the feature promises the agent runs at the requested priority.
+
+The launch line now carries the difference between the requested priority and
+the priority the pane's shell already runs at, on the platforms whose program
+adjusts. The shell's priority is read from the operating system before the
+line is built, so the agent ends up at the requested priority on every
+platform. On a host whose shell runs at the default priority, the launch line
+is unchanged.
+
+A new acceptance test starts the server at another priority and pins the
+outcome:
+
+```
+cargo nextest run --locked -E 'binary(agent_priority)'
+  Summary [  21.986s] 13 tests run: 13 passed (1 leaky), 0 skipped
+```
+
+The test is red without the fix — the deliberate mutant that restores the
+plain `nice -n <request>` prefix fails it:
+
+```
+    thread 'the_requested_priority_is_reached_from_a_shell_at_another_priority' panicked at tests/agent_priority.rs:508:5:
+    assertion `left == right` failed
+      left: Array [String("nice"), String("-n"), String("19"), String("pi")]
+     right: Array [String("nice"), String("-n"), String("14"), String("pi")]
+```
+
 ## Final state
 
 ```
 cargo nextest run --locked -E 'binary(agent_priority)'
-  Summary [  14.873s] 12 tests run: 12 passed, 0 skipped
+  Summary [  21.986s] 13 tests run: 13 passed (1 leaky), 0 skipped
 
 cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket)'
   Summary [   4.019s] 1 test run: 1 passed, 4077 skipped

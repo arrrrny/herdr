@@ -1672,7 +1672,7 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
 }
 
 /// Windows has no Unix scheduling priority, so the launch line is unchanged.
-pub(crate) fn agent_nice_prefix(_nice: i32) -> Vec<String> {
+pub(crate) fn agent_nice_prefix(_nice: i32, _current_priority: Option<i32>) -> Vec<String> {
     Vec::new()
 }
 

@@ -37,13 +37,18 @@ pub(crate) fn validate_agent_nice(nice: i32) -> Result<i32, AgentStartError> {
 /// the agent inherits it before it forks any child and every descendant keeps
 /// it. Without a priority the launch line is exactly the agent executable
 /// followed by the agent's own arguments.
+///
+/// `current_priority` is the priority the pane's shell already runs at. It is
+/// only consulted on platforms whose `nice` adjusts the priority relative to
+/// the caller's.
 pub(crate) fn agent_launch_argv(
     executable: String,
     args: Vec<String>,
     nice: Option<i32>,
+    current_priority: Option<i32>,
 ) -> Vec<String> {
     let mut argv = match nice {
-        Some(nice) => crate::platform::agent_nice_prefix(nice),
+        Some(nice) => crate::platform::agent_nice_prefix(nice, current_priority),
         None => Vec::new(),
     };
     argv.push(executable);
@@ -238,11 +243,13 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+        let shell_priority = runtime.child_pid().and_then(crate::platform::process_nice);
 
         let argv = agent_launch_argv(
             crate::detect::interactive_agent_executable(kind).to_string(),
             params.args,
             nice,
+            shell_priority,
         );
         // The launch line names the priority program, so the pane's shell has
         // to find it. A missing program is reported instead of leaving the
@@ -574,14 +581,19 @@ mod tests {
     #[test]
     fn the_launch_line_is_unchanged_without_a_priority() {
         assert_eq!(
-            super::agent_launch_argv("pi".to_string(), vec!["--auto".to_string()], None),
+            super::agent_launch_argv("pi".to_string(), vec!["--auto".to_string()], None, None),
             vec!["pi".to_string(), "--auto".to_string()]
         );
     }
 
     #[test]
     fn the_launch_line_puts_the_priority_before_the_agent_executable() {
-        let argv = super::agent_launch_argv("pi".to_string(), vec!["--auto".to_string()], Some(19));
+        let argv = super::agent_launch_argv(
+            "pi".to_string(),
+            vec!["--auto".to_string()],
+            Some(19),
+            Some(0),
+        );
         let executable = argv
             .iter()
             .position(|arg| arg == "pi")

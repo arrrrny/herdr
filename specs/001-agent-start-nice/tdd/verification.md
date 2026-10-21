@@ -16,7 +16,7 @@ feature's behavior survived.
 
 ## What was audited
 
-The feature has six load-bearing decisions. Each one was broken on purpose
+The feature has seven load-bearing decisions. Each one was broken on purpose
 and the pinning test was observed to fail, which is the evidence that the
 test actually holds the behavior down.
 
@@ -28,6 +28,7 @@ test actually holds the behavior down.
 | 4 | The reported process priority is dropped | `src/app/api/panes.rs` | `tests/agent_priority.rs::pane_process_info_reports_the_applied_priority` | killed |
 | 5 | The `agent` section is not a known top-level configuration section | `src/config/io.rs` | `src/config/io.rs::load_live_config_parses_the_agent_start_section` | killed |
 | 6 | The CLI drops the requested priority while parsing | `src/cli/agent/bindings.rs` | `src/cli/agent/bindings_tests.rs::agent_start_parses_a_requested_priority` | killed |
+| 7 | The launch line applies the requested priority as an adjustment instead of the priority itself | `src/platform/macos.rs` | `tests/agent_priority.rs::the_requested_priority_is_reached_from_a_shell_at_another_priority` | killed |
 
 **Surviving mutants: 0.**
 
@@ -40,7 +41,7 @@ still passes. The raw output is reproduced in `tdd/cycle-log.md`.
 
 ```
 cargo nextest run --locked -E 'binary(agent_priority)'
-  Summary [  14.873s] 12 tests run: 12 passed, 0 skipped
+  Summary [  21.986s] 13 tests run: 13 passed (1 leaky), 0 skipped
 
 cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket)'
   Summary [   4.019s] 1 test run: 1 passed, 4077 skipped
@@ -61,6 +62,7 @@ resolved.
 | SC-005 detection still works for a priority-requested agent | `agent_start_with_a_priority_still_detects_the_agent` |
 | SC-006 every agent kind accepts the priority, including trailing `--` arguments | `agent_start_passes_trailing_agent_arguments_with_a_priority` |
 | SC-007 the reported priority matches the applied priority | `pane_process_info_reports_the_applied_priority` |
+| SC-008 the agent runs at the requested priority from any shell priority | `the_requested_priority_is_reached_from_a_shell_at_another_priority` |
 
 The same fields also travel over the raw socket, which
 `tests/api_ping.rs::agent_start_carries_the_scheduling_priority_over_the_socket`

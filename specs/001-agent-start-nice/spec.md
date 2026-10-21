@@ -158,6 +158,11 @@ pane's process information and confirm the reported priority matches.
   launch MUST be unchanged and the priority MUST be reported as absent.
 - **FR-016**: The feature MUST apply to every supported agent kind, including
   kinds that take trailing arguments after `--`.
+- **FR-017**: The requested priority MUST be the priority the agent actually
+  runs at, on every platform that has a Unix scheduling priority. Where the
+  platform's priority program adjusts the caller's priority instead of
+  setting it, Herdr MUST compensate for the priority the pane's shell
+  already runs at.
 
 ### Key Entities
 
@@ -194,6 +199,8 @@ pane's process information and confirm the reported priority matches.
   including kinds invoked with trailing arguments after `--`.
 - **SC-007**: The reported scheduling priority matches the actual priority of
   the running process in every case where the operating system can report it.
+- **SC-008**: An agent requested at priority 19 runs at priority 19 even when
+  the pane's shell runs at another priority.
 
 ## Assumptions
 
@@ -205,6 +212,10 @@ pane's process information and confirm the reported priority matches.
 - Raising priority above the default requires elevated privileges; an
   unprivileged Herdr cannot grant it, and the operating system reports the
   refusal at launch.
+- The platform's priority program is not spelled the same everywhere: GNU
+  `nice -n` sets the priority, while the macOS program adjusts the caller's
+  priority. Herdr hides that difference, and the agent always ends up at the
+  requested priority.
 - Fresh launches are in scope. Agents resumed from a restored session are
   launched by a different path and are explicitly out of scope.
 - The existing "renice after readiness" workaround used by affected hosts can
