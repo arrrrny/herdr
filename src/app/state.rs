@@ -852,6 +852,8 @@ pub struct AppState {
     pub cjk_ime_cursor_shape: u8,
     pub kitty_graphics_enabled: bool,
     pub default_shell: String,
+    /// Default CPU scheduling priority for freshly started agents.
+    pub agent_start_nice: i32,
     pub shell_mode: crate::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
     pub pane_scrollback_limit_bytes: usize,
@@ -1090,6 +1092,7 @@ impl AppState {
             cjk_ime_cursor_shape: 2, // steady_block
             kitty_graphics_enabled: false,
             default_shell: String::new(),
+            agent_start_nice: 0,
             shell_mode: crate::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,
             pane_scrollback_limit_bytes: crate::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,

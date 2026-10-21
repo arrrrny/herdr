@@ -11,6 +11,7 @@ const NESTED_HERDR_MESSAGES: [&str; 6] = [
     "recursion detected. base case not found. aborting.",
 ];
 
+mod agent_priority;
 mod agent_resume;
 mod agent_view_eval;
 mod api;
@@ -401,6 +402,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # resume_agents_on_restore = true
 # Milliseconds between automatic agent restores; 0 starts them without spacing.
 # startup_per_agent_delay_ms = 100
+
+[agent.start]
+# CPU scheduling priority for agents started with `herdr agent start`, from
+# -20 (most aggressive) to 19 (most deferred). The agent and every child it
+# forks inherit it. 0 (the default) leaves the launch unchanged. Negative
+# values need elevated privileges and fail for an unprivileged herdr.
+# `herdr agent start --nice N` overrides this default for a single launch.
+# nice = 0
 
 [remote]
 # Whether herdr manages the ssh config used for `herdr --remote`.

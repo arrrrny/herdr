@@ -1451,6 +1451,18 @@
       ]
     },
     {
+      "id": "agent",
+      "title": "Agents",
+      "keys": [
+        {
+          "key": "agent.start.nice",
+          "type": "integer",
+          "default": "0",
+          "description": "CPU scheduling priority applied to a freshly started agent and to every child it forks, from -20 (most aggressive) to 19 (most deferred). 0 leaves the launch line unchanged. A per-launch `herdr agent start --nice` value overrides this default, and an explicit `--nice 0` also overrides it. Negative values need elevated privileges. Unix only; other platforms ignore the setting."
+        }
+      ]
+    },
+    {
       "id": "worktrees",
       "title": "Worktrees",
       "keys": [

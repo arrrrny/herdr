@@ -262,6 +262,21 @@ pub struct TerminalConfig {
     pub kitty_graphics: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Defaults for freshly started agents.
+    pub start: AgentStartConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentStartConfig {
+    /// CPU scheduling priority applied to freshly started agents, from -20
+    /// (most aggressive) to 19 (most deferred). Zero disables the priority.
+    pub nice: i32,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
@@ -315,6 +330,7 @@ pub struct Config {
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
     pub session: SessionConfig,
+    pub agent: AgentConfig,
     pub server: ServerConfig,
     pub update: UpdateConfig,
     pub keys: KeysConfig,

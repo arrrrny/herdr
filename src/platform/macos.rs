@@ -209,6 +209,25 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
     super::interactive_unix_shell_command(argv, shell_name, shell_quote)
 }
 
+/// Builds the launch-line prefix that applies a CPU scheduling priority.
+///
+/// The prefix is part of the command the pane's shell runs, so the agent
+/// inherits the priority before it forks any child.
+pub(crate) fn agent_nice_prefix(nice: i32) -> Vec<String> {
+    if nice == 0 {
+        return Vec::new();
+    }
+    vec!["nice".to_string(), "-n".to_string(), nice.to_string()]
+}
+
+/// Reads the CPU scheduling priority the operating system applied to a process.
+pub fn process_nice(pid: u32) -> Option<i32> {
+    if pid == 0 {
+        return None;
+    }
+    Some(process_bsdinfo(pid)?.pbi_nice)
+}
+
 fn shell_quote(value: &str) -> String {
     if !value.is_empty()
         && value.chars().all(|ch| {
@@ -1695,5 +1714,27 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
             std::path::Path::new(value).exists(),
             "-execute must point at a real file: {value}"
         );
+    }
+
+    #[test]
+    fn the_priority_prefix_precedes_the_agent_executable() {
+        assert_eq!(
+            super::agent_nice_prefix(19),
+            vec!["nice".to_string(), "-n".to_string(), "19".to_string()]
+        );
+        assert_eq!(
+            super::agent_nice_prefix(-20),
+            vec!["nice".to_string(), "-n".to_string(), "-20".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_zero_priority_produces_no_prefix() {
+        assert!(super::agent_nice_prefix(0).is_empty());
+    }
+
+    #[test]
+    fn the_current_process_reports_its_priority() {
+        assert!(super::process_nice(std::process::id()).is_some());
     }
 }

@@ -557,6 +557,7 @@ impl App {
                         cmdline: process.cmdline,
                         cwd: crate::platform::process_cwd(process.pid)
                             .map(|cwd| cwd.display().to_string()),
+                        nice: crate::platform::process_nice(process.pid),
                     })
                     .collect()
             })

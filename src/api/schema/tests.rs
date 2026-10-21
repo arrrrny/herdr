@@ -100,6 +100,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
             timeout_ms: Some(30_000),
+            nice: Some(19),
         }),
     };
     let start_json = serde_json::to_value(&start).unwrap();
@@ -528,6 +529,46 @@ fn pane_process_info_request_round_trips() {
     assert_eq!(json["params"]["pane_id"], "w1-1");
     let restored: Request = serde_json::from_value(json).unwrap();
     assert_eq!(restored, request);
+}
+
+#[test]
+fn pane_process_info_carries_the_scheduling_priority() {
+    let process = PaneProcessInfoProcess {
+        pid: 42,
+        name: "pi".into(),
+        argv0: Some("pi".into()),
+        argv: Some(vec!["pi".into()]),
+        cmdline: Some("pi".into()),
+        cwd: Some("/tmp".into()),
+        nice: Some(19),
+    };
+
+    let json = serde_json::to_value(&process).unwrap();
+    assert_eq!(json["nice"], 19);
+    assert_eq!(
+        serde_json::from_value::<PaneProcessInfoProcess>(json).unwrap(),
+        process
+    );
+}
+
+#[test]
+fn pane_process_info_omits_an_unknown_scheduling_priority() {
+    let process = PaneProcessInfoProcess {
+        pid: 42,
+        name: "pi".into(),
+        argv0: None,
+        argv: None,
+        cmdline: None,
+        cwd: None,
+        nice: None,
+    };
+
+    let json = serde_json::to_value(&process).unwrap();
+    assert!(json.get("nice").is_none(), "{json}");
+    assert_eq!(
+        serde_json::from_value::<PaneProcessInfoProcess>(json).unwrap(),
+        process
+    );
 }
 
 #[test]

@@ -1210,6 +1210,124 @@ fn agent_start_targets_existing_pane_over_socket() {
 }
 
 #[test]
+fn agent_start_carries_the_scheduling_priority_over_the_socket() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let fake_pi = bin.join("pi");
+    fs::write(&fake_pi, "#!/bin/sh\nHERDR_AGENT=pi exec /bin/sleep 20\n").unwrap();
+    fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
+    // The server's PATH is the private bin directory, so `nice` has to be
+    // reachable from there for the priority prefix to resolve.
+    let nice = ["/usr/bin/nice", "/bin/nice"]
+        .iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .expect("the host must provide a nice binary");
+    std::os::unix::fs::symlink(nice, bin.join("nice")).unwrap();
+
+    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+    let workspace = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "nice_workspace",
+            "method": "workspace.create",
+            "params": { "cwd": base.display().to_string(), "focus": false }
+        })
+        .to_string(),
+    );
+    let pane_id = workspace["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let started = {
+        // A freshly created pane may still be initializing its shell, and the
+        // raw request has no retry of its own.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let started = send_request(
+                &socket_path,
+                &serde_json::json!({
+                    "id": "agent_start_nice",
+                    "method": "agent.start",
+                    "params": {
+                        "name": "main",
+                        "kind": "pi",
+                        "pane_id": pane_id,
+                        "timeout_ms": 8_000,
+                        "nice": 19
+                    }
+                })
+                .to_string(),
+            );
+            if started.get("error").is_none() {
+                break started;
+            }
+            assert_eq!(
+                started["error"]["code"], "agent_pane_busy",
+                "response: {started}"
+            );
+            if Instant::now() >= deadline {
+                panic!("the agent never started: {started}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    assert_eq!(
+        started["result"]["type"], "agent_started",
+        "response: {started}"
+    );
+    assert_eq!(
+        started["result"]["argv"],
+        serde_json::json!(["nice", "-n", "19", "pi"])
+    );
+
+    // The launch command reaches the pane's shell asynchronously, so the
+    // agent process may not have exec'd yet when the answer arrives.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let agent = loop {
+        let processes = send_request(
+            &socket_path,
+            &format!(
+                r#"{{"id":"nice_process_info","method":"pane.process_info","params":{{"pane_id":"{pane_id}"}}}}"#
+            ),
+        );
+        let processes = processes["result"]["process_info"]["foreground_processes"]
+            .as_array()
+            .unwrap();
+        if let Some(process) = processes
+            .iter()
+            .find(|process| process["nice"].as_i64() == Some(19))
+        {
+            break process.clone();
+        }
+        if Instant::now() >= deadline {
+            panic!("the agent process must report the applied priority: {processes:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let pid = agent["pid"].as_u64().unwrap();
+    let reported = std::process::Command::new("ps")
+        .args(["-o", "ni=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let applied: i32 = String::from_utf8_lossy(&reported.stdout)
+        .trim()
+        .parse()
+        .expect("the operating system must report a priority");
+    assert_eq!(applied, 19);
+
+    cleanup_spawned_herdr(child, base);
+}
+
+#[test]
 fn agent_methods_round_trip_over_socket() {
     let _lock = test_lock();
     let base = unique_test_dir();

@@ -193,6 +193,12 @@ cli_params! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub timeout_ms: Option<u64> => Field::new(None).input(bindings::timeout()
             .help("Wait for interactive readiness (default: 30000; max: 300000)")),
+        /// CPU scheduling priority for the started agent, from -20 to 19.
+        /// The agent and every child it forks inherit it. Absent means the
+        /// configured `[agent.start] nice` default applies.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub nice: Option<i32> => Field::new(None).input(bindings::nice()
+            .help("CPU scheduling priority for the agent and its children (-20..19; 0 disables)")),
     }
 }
 

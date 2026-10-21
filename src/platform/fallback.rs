@@ -182,6 +182,16 @@ pub(crate) fn interactive_shell_command(_argv: &[String], _shell_name: &str) -> 
     None
 }
 
+/// Unsupported platform stub: no Unix scheduling priority, so no prefix.
+pub(crate) fn agent_nice_prefix(_nice: i32) -> Vec<String> {
+    Vec::new()
+}
+
+/// Unsupported platform stub: no Unix scheduling priority to report.
+pub fn process_nice(_pid: u32) -> Option<i32> {
+    None
+}
+
 /// Unsupported platform stub.
 pub(crate) fn scrollback_editor_argv(_path: &std::path::Path) -> std::io::Result<Vec<String>> {
     Err(std::io::Error::new(

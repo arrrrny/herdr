@@ -562,6 +562,17 @@ Automatic restores start one agent at a time, 100 milliseconds apart by default,
 
 Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
 
+## Agent launch priority
+
+Herdr can start Agents at a specific CPU scheduling priority:
+
+```toml
+[agent.start]
+nice = 19
+```
+
+The priority becomes part of the launch line, so the Agent inherits it before it forks any child and every descendant keeps it. `herdr agent start --nice N` overrides this default for a single launch, and an explicit `--nice 0` overrides it as well. Values run from -20 (most aggressive) to 19 (most deferred); 0 leaves the launch line unchanged. Negative values need elevated privileges, and the priority is ignored on platforms without a Unix scheduling priority. An out-of-range value is reported as a configuration diagnostic and falls back to 0.
+
 ## IME cursor tracking
 
 On macOS, AI Agent TUIs that hide the hardware cursor can prevent native input-method candidate windows from following the focused pane. Reveal a cursor anchor for those panes with:
