@@ -163,6 +163,13 @@ pane's process information and confirm the reported priority matches.
   platform's priority program adjusts the caller's priority instead of
   setting it, Herdr MUST compensate for the priority the pane's shell
   already runs at.
+- **FR-018**: When a priority is in effect and the platform's priority
+  program cannot be found, the launch MUST be rejected before any agent
+  starts, with an error that names the program, rather than submitting a
+  launch line that cannot run.
+- **FR-019**: When a launch names a priority program, a startup failure MUST
+  name that program, so the operator can tell a missing program apart from
+  an agent that simply did not become ready.
 
 ### Key Entities
 
@@ -201,14 +208,20 @@ pane's process information and confirm the reported priority matches.
   the running process in every case where the operating system can report it.
 - **SC-008**: An agent requested at priority 19 runs at priority 19 even when
   the pane's shell runs at another priority.
+- **SC-009**: On a host whose search path holds no priority program, a launch
+  that requests a priority is rejected with an error naming the program, and
+  no agent is started. A launch that requests no priority still succeeds on
+  the same host.
 
 ## Assumptions
 
 - The feature targets Unix-like operating systems, where scheduling priority
   is the standard CPU-niceness concept. Other operating systems keep their
   current behavior.
-- The priority program is available on the target machine's search path. A
-  missing program surfaces the operating system's own error.
+- The priority program is usually available on the target machine's search
+  path. When it is not, Herdr rejects the launch before any agent starts and
+  names the missing program, instead of leaving the operator with a launch
+  line that can only time out.
 - Raising priority above the default requires elevated privileges; an
   unprivileged Herdr cannot grant it, and the operating system reports the
   refusal at launch.

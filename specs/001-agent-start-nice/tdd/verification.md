@@ -16,7 +16,7 @@ feature's behavior survived.
 
 ## What was audited
 
-The feature has seven load-bearing decisions. Each one was broken on purpose
+The feature has nine load-bearing decisions. Each one was broken on purpose
 and the pinning test was observed to fail, which is the evidence that the
 test actually holds the behavior down.
 
@@ -29,6 +29,8 @@ test actually holds the behavior down.
 | 5 | The `agent` section is not a known top-level configuration section | `src/config/io.rs` | `src/config/io.rs::load_live_config_parses_the_agent_start_section` | killed |
 | 6 | The CLI drops the requested priority while parsing | `src/cli/agent/bindings.rs` | `src/cli/agent/bindings_tests.rs::agent_start_parses_a_requested_priority` | killed |
 | 7 | The launch line applies the requested priority as an adjustment instead of the priority itself | `src/platform/macos.rs` | `tests/agent_priority.rs::the_requested_priority_is_reached_from_a_shell_at_another_priority` | killed |
+| 8 | The launch is submitted even when the priority program is not on the server's search path | `src/app/agents.rs` | `tests/agent_priority.rs::agent_start_reports_a_missing_priority_program` | killed |
+| 9 | The server accepts an out-of-range requested priority over the socket | `src/app/agents.rs` | `tests/api_ping.rs::agent_start_rejects_an_out_of_range_priority_over_the_socket` | killed |
 
 **Surviving mutants: 0.**
 
@@ -41,10 +43,10 @@ still passes. The raw output is reproduced in `tdd/cycle-log.md`.
 
 ```
 cargo nextest run --locked -E 'binary(agent_priority)'
-  Summary [  21.986s] 13 tests run: 13 passed (1 leaky), 0 skipped
+  Summary [  22.177s] 15 tests run: 15 passed, 0 skipped
 
-cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket)'
-  Summary [   4.019s] 1 test run: 1 passed, 4077 skipped
+cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket) or test(agent_start_rejects_an_out_of_range_priority_over_the_socket)'
+  Summary [   3.605s] 2 tests run: 2 passed, 4084 skipped
 ```
 
 Both runs were taken against a build produced from the committed source after
@@ -63,10 +65,13 @@ resolved.
 | SC-006 every agent kind accepts the priority, including trailing `--` arguments | `agent_start_passes_trailing_agent_arguments_with_a_priority` |
 | SC-007 the reported priority matches the applied priority | `pane_process_info_reports_the_applied_priority` |
 | SC-008 the agent runs at the requested priority from any shell priority | `the_requested_priority_is_reached_from_a_shell_at_another_priority` |
+| SC-009 a missing priority program is rejected by name, and a priority-free launch still works | `agent_start_reports_a_missing_priority_program` and `a_launch_without_a_priority_does_not_need_the_priority_program` |
 
 The same fields also travel over the raw socket, which
 `tests/api_ping.rs::agent_start_carries_the_scheduling_priority_over_the_socket`
-covers separately.
+covers separately, together with
+`tests/api_ping.rs::agent_start_rejects_an_out_of_range_priority_over_the_socket`
+for the server-side range check.
 
 ## Maintenance checks
 

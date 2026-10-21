@@ -259,12 +259,94 @@ plain `nice -n <request>` prefix fails it:
      right: Array [String("nice"), String("-n"), String("14"), String("pi")]
 ```
 
+## Cycle 11 — a missing priority program must not look like a successful launch
+
+The review of the first push asked what happens on a host that does not have
+the priority program. The answer was: nothing good. The launch line named a
+program the pane's shell could not find, the shell wrote `command not found`
+into the pane, the agent never appeared, and the caller waited out its
+timeout with no hint about the cause.
+
+The deliberate mutant that removed the availability check showed the same
+failure from the caller's side, and it was worse than a timeout — it looked
+like a success:
+
+```
+status=Some(0)
+{"type":"agent_started","agent_status":"idle","interactive_ready":true,"argv":["nice","-n","19","pi"]}
+```
+
+The server accepted the launch and reported the agent as ready. The pane was
+empty. The caller's only way to notice was to look at the pane.
+
+The server now checks the program the launch line names against its own
+search path before the line is submitted, and refuses the launch with
+`agent_nice_unavailable`, naming the program. The rejection happens before
+anything is written to the pane, so a refused launch leaves the pane
+untouched.
+
+Two acceptance tests pin this down:
+
+```
+cargo nextest run --locked -E 'binary(agent_priority)'
+  Summary [  22.177s] 15 tests run: 15 passed, 0 skipped
+```
+
+- `agent_start_reports_a_missing_priority_program` — the launch is refused
+  with an error that names the program, and no agent is started.
+- `a_launch_without_a_priority_does_not_need_the_priority_program` — a
+  priority-free launch still succeeds on that same host, because the check
+  only applies when a priority is actually in effect.
+
+## Cycle 12 — the socket path checks the range itself, and the launch line is not a constant
+
+Two gaps showed up in the socket-level evidence.
+
+The first was that the raw socket path had no test for an out-of-range
+requested priority. The CLI rejects an out-of-range value before it sends
+anything, but the socket can be driven by a client that is not the Herdr CLI,
+so the server has to refuse the value itself. The server does refuse it, and
+`tests/api_ping.rs::agent_start_rejects_an_out_of_range_priority_over_the_socket`
+now pins that down; the deliberate mutant that drops the server-side range
+check fails it.
+
+The second was that the socket test asserted a fixed launch line:
+
+```rust
+serde_json::json!(["nice", "-n", "19", "pi"])
+```
+
+That is only true on a host whose processes start at the default priority.
+The macOS CI runner starts its processes at a priority of -10, and macOS
+`nice -n` adjusts the caller's priority, so the launch line there carries
+`29`, not `19`. The test failed on the runner for a reason that had nothing
+to do with the feature.
+
+The assertion now derives the expected adjustment from the priority the
+pane's shell actually runs at:
+
+```rust
+serde_json::json!([
+    "nice",
+    "-n",
+    expected_adjustment(19, launch_baseline()),
+    "pi"
+])
+```
+
+`launch_baseline()` reads the priority of the test process, which the server
+and the pane's shell inherit, and `expected_adjustment` applies the
+platform's rule: the requested value on a platform that sets the priority,
+the difference on a platform that adjusts it. The test now states the
+invariant — the launch line carries the right adjustment for this host —
+instead of a number that only holds on one of them.
+
 ## Final state
 
 ```
 cargo nextest run --locked -E 'binary(agent_priority)'
-  Summary [  21.986s] 13 tests run: 13 passed (1 leaky), 0 skipped
+  Summary [  22.177s] 15 tests run: 15 passed, 0 skipped
 
-cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket)'
-  Summary [   4.019s] 1 test run: 1 passed, 4077 skipped
+cargo nextest run --locked -E 'test(agent_start_carries_the_scheduling_priority_over_the_socket) or test(agent_start_rejects_an_out_of_range_priority_over_the_socket)'
+  Summary [   3.605s] 2 tests run: 2 passed, 4084 skipped
 ```

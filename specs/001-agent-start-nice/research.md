@@ -175,7 +175,36 @@ Herdr reads it from the operating system before building the line.
 - *Rename the flag to say "adjust by"* — rejected: the operator wants a
   priority.
 
+## R10 — What happens when the priority program is not installed?
+
+**Decision**: The launch is rejected before any agent starts, with an error
+that names the missing program (`agent_nice_unavailable`). A launch that
+requests no priority is unaffected.
+
+**Rationale**: The launch line runs in the pane's shell, which inherits the
+server's environment, so the server's search path decides whether the
+priority program is found there. If it is missing, the shell reports
+`command not found` inside the pane and the agent simply never appears. The
+operator is left with a launch that timed out, and nothing in the error says
+that the machine is missing `nice`. Checking the program before the launch
+line is submitted turns that silence into a named error, and it leaves the
+pane untouched.
+
+The check is only meaningful when a priority is actually in effect: a
+priority-free launch line names no priority program, so it must keep working
+on a host that does not have one.
+
+**Alternatives considered**:
+- *Let the launch fail in the pane and surface the shell's own error* —
+  rejected: the shell's error is written into the pane, not returned to the
+  caller, and the operator sees a timeout instead of the cause.
+- *Fall back to an unprioritized launch* — rejected: silently dropping the
+  requested priority is worse than refusing the launch; the operator asked for
+  a specific priority.
+- *Require the program at startup* — rejected: the priority is opt-in, so a
+  host without the program must keep working for every other launch.
+
 ## Resolved clarifications
 
 All `NEEDS CLARIFICATION` markers from the technical context were resolved
-into R1-R9 above. No marker remains open.
+into R1-R10 above. No marker remains open.

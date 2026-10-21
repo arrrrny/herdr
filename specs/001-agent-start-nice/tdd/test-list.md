@@ -2,9 +2,9 @@
 feature: 001-agent-start-nice
 loop: outside-in
 profile: .specify/memory/tdd-profile.md
-spec_criteria: 7
+spec_criteria: 9
 planned_at: a69eee85
-updated_at: a69eee85
+updated_at: 90df45cc
 suite_baseline: green
 ---
 
@@ -32,6 +32,9 @@ the same acceptance evidence exists on every Unix CI job.
 | A6  | Every supported agent kind accepts the priority, including kinds invoked with trailing `--` arguments | SC-006 | example | DONE  | `tests/agent_priority.rs::agent_start_passes_trailing_agent_arguments_with_a_priority` |
 | A7  | The reported priority matches the priority the operating system actually applied                   | SC-007 | example | DONE  | `tests/agent_priority.rs::pane_process_info_reports_the_applied_priority` |
 | A8  | An agent requested at priority 19 runs at 19 even when the pane's shell runs at another priority | SC-008 | example | DONE  | `tests/agent_priority.rs::the_requested_priority_is_reached_from_a_shell_at_another_priority` |
+| A9  | A launch on a host without the priority program is rejected with an error naming the program, and no agent is started | SC-009 | example | DONE  | `tests/agent_priority.rs::agent_start_reports_a_missing_priority_program` |
+| A10 | A launch that requests no priority still succeeds on a host without the priority program | SC-009 | example | DONE  | `tests/agent_priority.rs::a_launch_without_a_priority_does_not_need_the_priority_program` |
+| A11 | An out-of-range requested priority is rejected over the raw socket, and no agent is started | SC-004 | example | DONE  | `tests/api_ping.rs::agent_start_rejects_an_out_of_range_priority_over_the_socket` |
 
 The same request and response fields also travel over the raw socket, which
 is covered separately by
@@ -51,6 +54,7 @@ observable result.
 | U20 | A value inside the range is accepted, including both boundaries               | FR-001      | example  | DONE  | `src/agent_priority.rs::a_value_inside_the_range_is_accepted` |
 | U21 | A non-numeric value is rejected                                               | FR-002      | example  | DONE  | `src/agent_priority.rs::a_non_numeric_value_is_rejected` |
 | U22 | An explicit zero overrides the configured default                             | FR-004      | example  | DONE  | `src/agent_priority.rs::an_explicit_zero_overrides_the_configured_default` |
+| U24 | A program that is not on the search path is reported as missing                | FR-018      | example  | DONE  | `src/agent_priority.rs::a_program_that_is_not_on_the_search_path_is_reported_as_missing` |
 
 ### `src/cli/agent/bindings.rs`
 
@@ -70,6 +74,7 @@ observable result.
 | U7  | The launch line is unchanged when the effective priority is zero           | SC-002, FR-004     | example  | DONE  | `src/app/agents.rs::the_launch_line_is_unchanged_without_a_priority` |
 | U8  | The launch line gains a priority prefix when the effective priority is non-zero | FR-008        | example  | DONE  | `src/app/agents.rs::the_launch_line_puts_the_priority_before_the_agent_executable` |
 | U9  | An out-of-range requested priority is rejected as an invalid agent argument | FR-002           | example  | DONE  | `src/app/agents.rs::an_out_of_range_requested_priority_is_rejected_and_not_clamped` |
+| U25 | A launch naming a priority program the server cannot find is rejected before the launch line is submitted, and the error names the program | FR-018, FR-019 | example | DONE  | `tests/agent_priority.rs::agent_start_reports_a_missing_priority_program` |
 
 ### `src/config/`
 
@@ -87,6 +92,7 @@ observable result.
 | U14 | A Unix platform produces a priority prefix for a non-zero priority  | FR-001      | example  | DONE  | `src/platform/macos.rs::the_priority_prefix_precedes_the_agent_executable` |
 | U15 | A platform without a Unix scheduling priority produces no prefix   | FR-015      | example  | DONE  | `src/platform/macos.rs::a_zero_priority_produces_no_prefix` |
 | U23 | The operating system's own priority is readable for a live process   | FR-012      | example  | DONE  | `src/platform/macos.rs::the_current_process_reports_its_priority` |
+| U26 | The platform names the priority program its launch line uses        | FR-018      | example  | DONE  | `src/platform/macos.rs::the_platform_names_the_priority_program_it_launches_with` |
 
 ### `src/api/schema/panes.rs`
 

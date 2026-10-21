@@ -836,6 +836,35 @@ fn agent_start_reports_a_missing_priority_program() {
 }
 
 #[test]
+fn a_launch_without_a_priority_does_not_need_the_priority_program() {
+    // The priority program is only required when a priority is in effect.
+    let _lock = test_lock();
+    let fixture = AgentFixture::without_priority_program();
+    let herdr = fixture.spawn();
+    let socket_path = fixture.socket_path.clone();
+    let pane_id = create_root_pane(&socket_path, &fixture.base);
+
+    let started = run_cli_json(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            &pane_id,
+            "--timeout",
+            "8000",
+        ],
+    );
+
+    assert_eq!(started["result"]["argv"], serde_json::json!(["pi"]));
+
+    cleanup_spawned_herdr(herdr, fixture.base);
+}
+
+#[test]
 fn pane_process_info_reports_the_applied_priority() {
     let _lock = test_lock();
     let fixture = AgentFixture::new();

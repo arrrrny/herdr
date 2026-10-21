@@ -32,6 +32,8 @@ herdr agent start <NAME> --kind <KIND> --pane <ID> [--timeout MS] [--nice N] [--
 - Negative values require elevated privileges. The operating system refuses
   them for an unprivileged Herdr, and the refusal is surfaced as the launch
   error.
+- If the priority program is not on the server's search path, the launch is
+  rejected before any agent starts, with an error naming the program.
 - The agent runs at exactly the requested priority, on every platform that
   has a Unix scheduling priority.
 
@@ -85,6 +87,16 @@ The agent-start request gains one optional field.
 - A launch whose priority program is not on the server's search path is
   rejected with `agent_nice_unavailable` and no agent is started.
 - A client that predates this field sends no `nice` and is unaffected.
+
+### Error responses
+
+| Code                      | Cause                                                    | Agent started |
+| ------------------------- | -------------------------------------------------------- | ------------- |
+| `agent_invalid_argument`  | The requested priority is outside `-20 ..= 19`.           | no            |
+| `agent_nice_unavailable`  | The priority program the launch line names is not on the server's search path. The error names the program. | no            |
+
+Both rejections happen before the launch line is submitted to the pane, so a
+rejected request leaves the pane untouched.
 
 ### Response
 

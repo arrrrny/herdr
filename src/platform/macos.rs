@@ -1765,6 +1765,11 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
     }
 
     #[test]
+    fn the_platform_names_the_priority_program_it_launches_with() {
+        assert_eq!(super::agent_nice_program(), Some("nice"));
+    }
+
+    #[test]
     fn a_zero_priority_produces_no_prefix() {
         assert!(super::agent_nice_prefix(0, Some(0)).is_empty());
         assert!(super::agent_nice_prefix(0, Some(-10)).is_empty());

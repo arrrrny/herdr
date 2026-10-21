@@ -88,6 +88,16 @@ information, compare.
 - [x] T036 Document the optional request and response fields in the socket API documentation (`docs/next/website/src/content/docs/socket-api.mdx`, `docs/next/website/src/content/docs/ja/`)
 - [x] T037 Run the full validation gate (`just check`)
 
+## Phase 8: Review follow-ups
+
+Raised by the review of the first push.
+
+- [x] T038 [behavior: U25] Reject the launch before it is submitted when the priority program is not on the server's search path, naming the program (`src/app/agents.rs`)
+- [x] T039 [behavior: A9] Test that a launch on a host without the priority program is rejected with an error naming the program (`tests/agent_priority.rs`)
+- [x] T040 [behavior: A10] Test that a launch without a priority still succeeds on a host without the priority program (`tests/agent_priority.rs`)
+- [x] T041 [behavior: A11] Test that an out-of-range requested priority is rejected over the raw socket (`tests/api_ping.rs`)
+- [x] T042 Derive the expected socket launch line from the priority the host's shell runs at, instead of asserting a fixed value (`tests/api_ping.rs`)
+
 ## Dependencies
 
 - T001, T002 must complete before any behavior task.

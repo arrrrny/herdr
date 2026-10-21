@@ -227,6 +227,37 @@ fn open_subscription(socket_path: &Path, json: &str) -> JsonLineReader {
     reader
 }
 
+/// Reads the CPU scheduling priority the operating system applied to a
+/// process, independently of anything Herdr reports.
+fn applied_priority(pid: u32) -> Option<i32> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "ni=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// The priority the pane's shell runs at, which a launch line starts from.
+///
+/// The pane's shell is a child of the server, and the server is a child of
+/// this test process, so the test process runs at that priority too.
+fn launch_baseline() -> i32 {
+    applied_priority(std::process::id()).expect("the host must report a priority")
+}
+
+/// The adjustment a requested priority puts on the launch line.
+///
+/// GNU `nice -n` sets the priority outright, so the requested value is passed
+/// through. macOS `nice -n` adjusts the caller's priority, so the difference
+/// between the request and the priority the pane's shell runs at is applied.
+fn expected_adjustment(nice: i32, baseline: i32) -> String {
+    if cfg!(target_os = "macos") {
+        (nice - baseline).to_string()
+    } else {
+        nice.to_string()
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn wait_for_event(
     reader: &mut JsonLineReader,
@@ -1286,7 +1317,12 @@ fn agent_start_carries_the_scheduling_priority_over_the_socket() {
     );
     assert_eq!(
         started["result"]["argv"],
-        serde_json::json!(["nice", "-n", "19", "pi"])
+        serde_json::json!([
+            "nice",
+            "-n",
+            expected_adjustment(19, launch_baseline()),
+            "pi"
+        ])
     );
 
     // The launch command reaches the pane's shell asynchronously, so the
