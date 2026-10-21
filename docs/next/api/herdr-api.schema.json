@@ -1352,6 +1352,14 @@
             "name": {
               "type": "string"
             },
+            "nice": {
+              "description": "CPU scheduling priority for the started agent, from -20 to 19.\nThe agent and every child it forks inherit it. Absent means the\nconfigured `[agent.start] nice` default applies.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "pane_id": {
               "type": "string"
             },
@@ -8523,6 +8531,14 @@
             },
             "name": {
               "type": "string"
+            },
+            "nice": {
+              "description": "CPU scheduling priority the operating system applied to the process.\nAbsent when the operating system cannot report one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "pid": {
               "format": "uint32",

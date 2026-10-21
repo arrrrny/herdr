@@ -123,6 +123,7 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.invalid_agent_start_nice_diagnostic())
             .collect()
     }
 
@@ -141,6 +142,30 @@ impl Config {
                 self.server.headless_cols, self.server.headless_rows
             )
         })
+    }
+
+    /// Reports an out-of-range `[agent.start] nice` value.
+    ///
+    /// The value is never clamped: an invalid default is reported and the
+    /// effective default falls back to "no priority prefix".
+    pub(crate) fn invalid_agent_start_nice_diagnostic(&self) -> Option<String> {
+        (!crate::agent_priority::is_valid(self.agent.start.nice)).then(|| {
+            format!(
+                "agent.start.nice ({}) is outside the supported range {}..={}",
+                self.agent.start.nice,
+                crate::agent_priority::MIN,
+                crate::agent_priority::MAX
+            )
+        })
+    }
+
+    /// The validated default scheduling priority for freshly started agents.
+    pub(crate) fn agent_start_nice(&self) -> i32 {
+        if self.invalid_agent_start_nice_diagnostic().is_some() {
+            0
+        } else {
+            self.agent.start.nice
+        }
     }
 
     pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {

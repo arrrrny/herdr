@@ -570,6 +570,10 @@ pub struct PaneProcessInfoProcess {
     pub cmdline: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// CPU scheduling priority the operating system applied to the process.
+    /// Absent when the operating system cannot report one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nice: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -113,6 +113,8 @@ Raw socket method names use dot notation:
 
 `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls. If the resolved agent is already `blocked`, `agent.prompt` returns `agent_blocked` without sending input or starting the wait.
 
+`agent.start` accepts an optional `nice` parameter with the CPU scheduling priority of the launched agent, from -20 to 19. The priority becomes part of the launch line, so the agent and every child it forks inherit it. The agent ends up at exactly the requested priority, also on macOS, whose `nice` adjusts the caller's priority instead of setting it. When the parameter is absent, the `[agent.start] nice` configuration default applies; when both are absent, the launch line is unchanged. An out-of-range value is rejected with `invalid_agent_nice` and no agent is started. If the `nice` program is not on the search path, the launch fails with `agent_nice_unavailable` and no agent is started.
+
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
 
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
@@ -193,8 +195,9 @@ compatibility with older servers does not restore these public methods.
 can make the next decision without private layout state.
 
 `pane.process_info` returns the pane's shell pid, foreground process group id
-when available, and foreground processes with pid, name, argv/cmdline, and cwd
-when the platform exposes them.
+when available, and foreground processes with pid, name, argv/cmdline, cwd, and
+the CPU scheduling priority `nice` when the platform exposes them. `nice` is
+omitted when the operating system cannot report a priority for a process.
 
 `layout.export` returns a portable tab layout tree. Omit `tab_id` and `pane_id`
 to export the active tab, pass `tab_id` to export that tab, or pass `pane_id` to

@@ -19,6 +19,52 @@ fn valid_agent_name(name: &str) -> bool {
         && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_'))
 }
 
+/// Validates a requested CPU scheduling priority for an agent launch.
+///
+/// An out-of-range value is rejected rather than clamped, so an agent is
+/// never started at a priority the operator did not ask for.
+pub(crate) fn validate_agent_nice(nice: i32) -> Result<i32, AgentStartError> {
+    if crate::agent_priority::is_valid(nice) {
+        Ok(nice)
+    } else {
+        Err(AgentStartError::InvalidNice(nice))
+    }
+}
+
+/// Builds the launch line for an agent.
+///
+/// The scheduling priority is part of the command the pane's shell runs, so
+/// the agent inherits it before it forks any child and every descendant keeps
+/// it. Without a priority the launch line is exactly the agent executable
+/// followed by the agent's own arguments.
+///
+/// `current_priority` is the priority the pane's shell already runs at. It is
+/// only consulted on platforms whose `nice` adjusts the priority relative to
+/// the caller's.
+pub(crate) fn agent_launch_argv(
+    executable: String,
+    args: Vec<String>,
+    nice: Option<i32>,
+    current_priority: Option<i32>,
+) -> Vec<String> {
+    let mut argv = match nice {
+        Some(nice) => crate::platform::agent_nice_prefix(nice, current_priority),
+        None => Vec::new(),
+    };
+    argv.push(executable);
+    argv.extend(args);
+    argv
+}
+
+/// Returns the priority program the launch line names, if it names one.
+fn priority_program(argv: &[String]) -> Option<&'static str> {
+    let program = crate::platform::agent_nice_program()?;
+    match argv.first() {
+        Some(first) if first == program => Some(program),
+        _ => None,
+    }
+}
+
 impl App {
     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
         self.state
@@ -160,6 +206,10 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
+        if let Some(nice) = params.nice {
+            validate_agent_nice(nice)?;
+        }
+        let nice = crate::agent_priority::resolve(params.nice, self.state.agent_start_nice);
         let persisted_agent_session =
             crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
@@ -193,9 +243,22 @@ impl App {
             .ok_or_else(|| AgentStartError::TargetUnavailable(params.pane_id.clone()))?;
         let shell_name = available_shell_name(runtime)
             .ok_or_else(|| AgentStartError::TargetBusy(params.pane_id.clone()))?;
+        let shell_priority = runtime.child_pid().and_then(crate::platform::process_nice);
 
-        let mut argv = vec![crate::detect::interactive_agent_executable(kind).to_string()];
-        argv.extend(params.args);
+        let argv = agent_launch_argv(
+            crate::detect::interactive_agent_executable(kind).to_string(),
+            params.args,
+            nice,
+            shell_priority,
+        );
+        // The launch line names the priority program, so the pane's shell has
+        // to find it. A missing program is reported instead of leaving the
+        // operator with a launch that times out.
+        if let Some(program) = priority_program(&argv) {
+            if !crate::agent_priority::program_on_path(program) {
+                return Err(AgentStartError::NiceUnavailable(program.to_string()));
+            }
+        }
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
@@ -255,6 +318,20 @@ impl App {
             AgentStartError::InvalidTimeout => crate::api::schema::ErrorBody {
                 code: "invalid_agent_timeout".into(),
                 message: INVALID_AGENT_TIMEOUT_MESSAGE.into(),
+            },
+            AgentStartError::InvalidNice(nice) => crate::api::schema::ErrorBody {
+                code: "invalid_agent_nice".into(),
+                message: format!(
+                    "agent nice value {nice} is outside the supported range {}..={}",
+                    crate::agent_priority::MIN,
+                    crate::agent_priority::MAX
+                ),
+            },
+            AgentStartError::NiceUnavailable(program) => crate::api::schema::ErrorBody {
+                code: "agent_nice_unavailable".into(),
+                message: format!(
+                    "the {program} program is not on the search path, so the agent was not started"
+                ),
             },
             AgentStartError::TargetNotFound(target) => crate::api::schema::ErrorBody {
                 code: "agent_pane_not_found".into(),
@@ -455,6 +532,8 @@ pub(super) enum AgentStartError {
     UnsupportedKind(String),
     InvalidArgument,
     InvalidTimeout,
+    InvalidNice(i32),
+    NiceUnavailable(String),
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),
@@ -496,6 +575,46 @@ mod tests {
             &"a".repeat(33),
         ] {
             assert!(!valid_agent_name(name), "expected {name:?} to be invalid");
+        }
+    }
+
+    #[test]
+    fn the_launch_line_is_unchanged_without_a_priority() {
+        assert_eq!(
+            super::agent_launch_argv("pi".to_string(), vec!["--auto".to_string()], None, None),
+            vec!["pi".to_string(), "--auto".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_launch_line_puts_the_priority_before_the_agent_executable() {
+        let argv = super::agent_launch_argv(
+            "pi".to_string(),
+            vec!["--auto".to_string()],
+            Some(19),
+            Some(0),
+        );
+        let executable = argv
+            .iter()
+            .position(|arg| arg == "pi")
+            .expect("the agent executable is part of the launch line");
+        assert_eq!(argv.last().map(String::as_str), Some("--auto"));
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
+            assert_eq!(argv[..executable], ["nice", "-n", "19"]);
+        } else {
+            assert_eq!(executable, 0);
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_requested_priority_is_rejected_and_not_clamped() {
+        assert!(matches!(super::validate_agent_nice(19), Ok(19)));
+        assert!(matches!(super::validate_agent_nice(-20), Ok(-20)));
+        for nice in [20, -21, i32::MAX, i32::MIN] {
+            assert!(
+                matches!(super::validate_agent_nice(nice), Err(super::AgentStartError::InvalidNice(value)) if value == nice),
+                "expected {nice} to be rejected"
+            );
         }
     }
 }

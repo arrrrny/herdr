@@ -1671,6 +1671,21 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
     select_pane_foreground_job_cached(child_pid).map(|job| job.process_group_id)
 }
 
+/// Windows has no Unix scheduling priority, so the launch line is unchanged.
+pub(crate) fn agent_nice_prefix(_nice: i32, _current_priority: Option<i32>) -> Vec<String> {
+    Vec::new()
+}
+
+/// Windows has no Unix scheduling priority, so no priority program is named.
+pub(crate) fn agent_nice_program() -> Option<&'static str> {
+    None
+}
+
+/// Windows reports a priority class rather than a Unix scheduling priority.
+pub fn process_nice(_pid: u32) -> Option<i32> {
+    None
+}
+
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
     process_cwd_from_handle(process.0)
