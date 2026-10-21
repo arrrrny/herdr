@@ -31,6 +31,7 @@ the same acceptance evidence exists on every Unix CI job.
 | A5  | A priority-requested agent still reaches a ready state and still accepts a delivered prompt           | SC-005 | example | DONE  | `tests/agent_priority.rs::agent_start_with_a_priority_still_detects_the_agent` |
 | A6  | Every supported agent kind accepts the priority, including kinds invoked with trailing `--` arguments | SC-006 | example | DONE  | `tests/agent_priority.rs::agent_start_passes_trailing_agent_arguments_with_a_priority` |
 | A7  | The reported priority matches the priority the operating system actually applied                   | SC-007 | example | DONE  | `tests/agent_priority.rs::pane_process_info_reports_the_applied_priority` |
+| A8  | An agent requested at priority 19 runs at 19 even when the pane's shell runs at another priority | SC-008 | example | DONE  | `tests/agent_priority.rs::the_requested_priority_is_reached_from_a_shell_at_another_priority` |
 
 The same request and response fields also travel over the raw socket, which
 is covered separately by

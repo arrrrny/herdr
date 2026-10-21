@@ -149,7 +149,33 @@ letting the operator discover it by failure.
   to express what the operating system can express, and would hide a real
   capability.
 
+## R9 — Does the platform's priority program mean the same thing everywhere?
+
+**Decision**: No, and Herdr compensates for it. On GNU systems `nice -n N`
+sets the priority to `N`; on macOS `nice -n N` *adjusts* the caller's
+priority by `N`, and the result is capped at 20. The launch line therefore
+carries the difference between the requested priority and the priority the
+pane's shell already runs at, on the platforms whose program adjusts.
+
+**Rationale**: The operator asked for a priority, not for an adjustment. A host
+whose shell does not run at the default priority — a machine whose processes
+are already scheduled aggressively, a CI runner that elevates its job
+processes — would otherwise land the agent somewhere else entirely, and the
+reported priority would silently disagree with the request. The pane's shell
+is the process the launch line runs in, so its priority is the baseline, and
+Herdr reads it from the operating system before building the line.
+
+**Alternatives considered**:
+- *Keep the plain `nice -n N` prefix everywhere and document the difference* —
+  rejected: the agent would not run at the requested priority, which is the
+  one thing the flag promises.
+- *Compute the difference inside the shell, with a nested `sh -c`* — rejected:
+  it puts a `ps` call and a nested shell into every launch line, and it makes
+  the line depend on a program the pane may not have.
+- *Rename the flag to say "adjust by"* — rejected: the operator wants a
+  priority.
+
 ## Resolved clarifications
 
 All `NEEDS CLARIFICATION` markers from the technical context were resolved
-into R1-R8 above. No marker remains open.
+into R1-R9 above. No marker remains open.

@@ -213,11 +213,17 @@ pub(crate) fn interactive_shell_command(argv: &[String], shell_name: &str) -> Op
 ///
 /// The prefix is part of the command the pane's shell runs, so the agent
 /// inherits the priority before it forks any child.
-pub(crate) fn agent_nice_prefix(nice: i32) -> Vec<String> {
+///
+/// macOS `nice -n` adjusts the priority *relative* to the caller's, unlike GNU
+/// `nice -n`, which sets it. The requested priority is therefore reached by
+/// applying the difference between it and the priority the pane's shell
+/// already runs at.
+pub(crate) fn agent_nice_prefix(nice: i32, current_priority: Option<i32>) -> Vec<String> {
     if nice == 0 {
         return Vec::new();
     }
-    vec!["nice".to_string(), "-n".to_string(), nice.to_string()]
+    let adjustment = current_priority.map_or(nice, |current| nice - current);
+    vec!["nice".to_string(), "-n".to_string(), adjustment.to_string()]
 }
 
 /// Reads the CPU scheduling priority the operating system applied to a process.
@@ -1719,18 +1725,41 @@ printf '%s\n' "$@" > "$HERDR_NOTIFY_ARGS"
     #[test]
     fn the_priority_prefix_precedes_the_agent_executable() {
         assert_eq!(
-            super::agent_nice_prefix(19),
+            super::agent_nice_prefix(19, Some(0)),
             vec!["nice".to_string(), "-n".to_string(), "19".to_string()]
         );
         assert_eq!(
-            super::agent_nice_prefix(-20),
+            super::agent_nice_prefix(-20, Some(0)),
             vec!["nice".to_string(), "-n".to_string(), "-20".to_string()]
         );
     }
 
     #[test]
+    fn the_priority_prefix_adjusts_for_the_caller_priority() {
+        // macOS `nice -n` is relative, so a pane that already runs at a
+        // different priority needs the difference to land on the request.
+        assert_eq!(
+            super::agent_nice_prefix(19, Some(-10)),
+            vec!["nice".to_string(), "-n".to_string(), "29".to_string()]
+        );
+        assert_eq!(
+            super::agent_nice_prefix(19, Some(5)),
+            vec!["nice".to_string(), "-n".to_string(), "14".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_unknown_caller_priority_falls_back_to_the_requested_value() {
+        assert_eq!(
+            super::agent_nice_prefix(19, None),
+            vec!["nice".to_string(), "-n".to_string(), "19".to_string()]
+        );
+    }
+
+    #[test]
     fn a_zero_priority_produces_no_prefix() {
-        assert!(super::agent_nice_prefix(0).is_empty());
+        assert!(super::agent_nice_prefix(0, Some(0)).is_empty());
+        assert!(super::agent_nice_prefix(0, Some(-10)).is_empty());
     }
 
     #[test]

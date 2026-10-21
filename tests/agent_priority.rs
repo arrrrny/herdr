@@ -35,6 +35,12 @@ struct SpawnedHerdr {
     child: Box<dyn Child + Send + Sync>,
 }
 
+impl SpawnedHerdr {
+    fn pid(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+}
+
 impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
@@ -103,6 +109,28 @@ fn spawn_herdr(
     path_override: &Path,
     config_toml: &str,
 ) -> SpawnedHerdr {
+    spawn_herdr_at_priority(
+        config_home,
+        runtime_dir,
+        socket_path,
+        path_override,
+        config_toml,
+        0,
+    )
+}
+
+/// Spawns a Herdr server that runs at the given scheduling priority.
+///
+/// The pane's shell inherits the server's priority, so this is how a test
+/// reproduces a host whose shell does not run at the default priority.
+fn spawn_herdr_at_priority(
+    config_home: &Path,
+    runtime_dir: &Path,
+    socket_path: &Path,
+    path_override: &Path,
+    config_toml: &str,
+    priority: i32,
+) -> SpawnedHerdr {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
@@ -121,9 +149,19 @@ fn spawn_herdr(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut cmd = if priority == 0 {
+        let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+        cmd.arg("server");
+        cmd
+    } else {
+        let mut cmd = CommandBuilder::new(nice_binary());
+        cmd.arg("-n");
+        cmd.arg(priority.to_string());
+        cmd.arg(env!("CARGO_BIN_EXE_herdr"));
+        cmd.arg("server");
+        cmd
+    };
     support::isolate_herdr_test_process(&mut cmd);
-    cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("HERDR_SOCKET_PATH", socket_path);
@@ -194,12 +232,18 @@ fn install_fake_agent(
     .unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let nice = ["/usr/bin/nice", "/bin/nice"]
-        .iter()
-        .find(|candidate| Path::new(candidate).exists())
-        .expect("the host must provide a nice binary");
+    let nice = nice_binary();
     std::os::unix::fs::symlink(nice, bin.join("nice")).unwrap();
     bin
+}
+
+/// The `nice` binary of the host.
+fn nice_binary() -> &'static Path {
+    ["/usr/bin/nice", "/bin/nice"]
+        .iter()
+        .map(Path::new)
+        .find(|candidate| candidate.exists())
+        .expect("the host must provide a nice binary")
 }
 
 /// Reads a file the fake agent writes, waiting for it to appear.
@@ -248,6 +292,29 @@ fn applied_priority(pid: u32) -> Option<i32> {
         .output()
         .ok()?;
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// The priority the pane's shell runs at, which is the baseline a launch line
+/// starts from.
+///
+/// The pane's shell is a child of the server, so it runs at the server's
+/// priority.
+fn launch_baseline(server: &SpawnedHerdr) -> i32 {
+    let pid = server.pid().expect("the server must have a pid");
+    applied_priority(pid).expect("the host must report a priority")
+}
+
+/// The adjustment a requested priority puts on the launch line.
+///
+/// GNU `nice -n` sets the priority outright, so the requested value is passed
+/// through. macOS `nice -n` adjusts the caller's priority, so the difference
+/// between the request and the priority the pane's shell runs at is applied.
+fn expected_adjustment(nice: i32, baseline: i32) -> String {
+    if cfg!(target_os = "macos") {
+        (nice - baseline).to_string()
+    } else {
+        nice.to_string()
+    }
 }
 
 /// Creates a workspace and returns the id of its root pane.
@@ -363,7 +430,12 @@ fn agent_start_applies_a_requested_priority() {
 
     assert_eq!(
         started["result"]["argv"],
-        serde_json::json!(["nice", "-n", "19", "pi"])
+        serde_json::json!([
+            "nice",
+            "-n",
+            expected_adjustment(19, launch_baseline(&herdr)),
+            "pi"
+        ])
     );
 
     let agent_pid: u32 = wait_for_agent_file(&fixture.pid_file, Duration::from_secs(10))
@@ -377,6 +449,74 @@ fn agent_start_applies_a_requested_priority() {
     assert_eq!(applied_priority(agent_pid), Some(19));
     // ... and every child the agent forks inherits it.
     assert_eq!(applied_priority(child_pid), Some(19));
+
+    cleanup_spawned_herdr(herdr, fixture.base);
+}
+
+#[test]
+fn the_requested_priority_is_reached_from_a_shell_at_another_priority() {
+    // The pane's shell does not have to run at the default priority, and
+    // `nice` adjusts the caller's priority on some platforms. The agent must
+    // still land on the requested priority.
+    let _lock = test_lock();
+    let fixture = AgentFixture::new();
+    let shell_priority = 5;
+    let host_priority =
+        applied_priority(std::process::id()).expect("the host must report a priority");
+    // macOS `nice -n` adjusts the caller's priority, so the server's
+    // priority is reached with an adjustment from the host's. GNU `nice -n`
+    // sets it outright.
+    let adjustment = if cfg!(target_os = "macos") {
+        shell_priority - host_priority
+    } else {
+        shell_priority
+    };
+    let herdr = spawn_herdr_at_priority(
+        &fixture.base.join("config"),
+        &fixture.base.join("runtime"),
+        &fixture.socket_path,
+        &fixture.bin,
+        "onboarding = false\n",
+        adjustment,
+    );
+    wait_for_socket(&fixture.socket_path, Duration::from_secs(10));
+    let socket_path = fixture.socket_path.clone();
+    let pane_id = create_root_pane(&socket_path, &fixture.base);
+
+    let started = run_cli_json(
+        &socket_path,
+        &[
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "pi",
+            "--pane",
+            &pane_id,
+            "--timeout",
+            "8000",
+            "--nice",
+            "19",
+        ],
+    );
+
+    let baseline = launch_baseline(&herdr);
+    assert_eq!(
+        baseline, shell_priority,
+        "the pane's shell must run at another priority"
+    );
+    assert_eq!(
+        started["result"]["argv"],
+        serde_json::json!(["nice", "-n", expected_adjustment(19, baseline), "pi"])
+    );
+
+    let agent_pid: u32 = wait_for_agent_file(&fixture.pid_file, Duration::from_secs(10))
+        .parse()
+        .unwrap();
+
+    // The agent lands on the requested priority, not on the shell's priority
+    // plus the request.
+    assert_eq!(applied_priority(agent_pid), Some(19));
 
     cleanup_spawned_herdr(herdr, fixture.base);
 }
@@ -409,7 +549,7 @@ fn agent_start_without_a_priority_keeps_the_launch_line_unchanged() {
     let agent_pid: u32 = wait_for_agent_file(&fixture.pid_file, Duration::from_secs(10))
         .parse()
         .unwrap();
-    let baseline = applied_priority(std::process::id()).expect("the host must report a priority");
+    let baseline = launch_baseline(&herdr);
     assert_eq!(applied_priority(agent_pid), Some(baseline));
 
     cleanup_spawned_herdr(herdr, fixture.base);
@@ -446,7 +586,12 @@ fn agent_start_honors_the_configured_default_and_lets_the_flag_override_it() {
     );
     assert_eq!(
         defaulted["result"]["argv"],
-        serde_json::json!(["nice", "-n", "19", "pi"])
+        serde_json::json!([
+            "nice",
+            "-n",
+            expected_adjustment(19, launch_baseline(&herdr)),
+            "pi"
+        ])
     );
 
     let overridden_pane = create_root_pane(&socket_path, &fixture.base);
@@ -468,7 +613,12 @@ fn agent_start_honors_the_configured_default_and_lets_the_flag_override_it() {
     );
     assert_eq!(
         overridden["result"]["argv"],
-        serde_json::json!(["nice", "-n", "5", "pi"])
+        serde_json::json!([
+            "nice",
+            "-n",
+            expected_adjustment(5, launch_baseline(&herdr)),
+            "pi"
+        ])
     );
 
     // An explicit zero means "today's behavior" and wins over the default.
@@ -609,7 +759,7 @@ fn agent_start_passes_trailing_agent_arguments_with_a_priority() {
         serde_json::json!([
             "nice",
             "-n",
-            "19",
+            expected_adjustment(19, launch_baseline(&herdr)),
             "pi",
             "--name",
             "scratch",
