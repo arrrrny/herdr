@@ -187,6 +187,11 @@ pub(crate) fn agent_nice_prefix(_nice: i32) -> Vec<String> {
     Vec::new()
 }
 
+/// Unsupported platform stub: no priority program is named.
+pub(crate) fn agent_nice_program() -> Option<&'static str> {
+    None
+}
+
 /// Unsupported platform stub: no Unix scheduling priority to report.
 pub fn process_nice(_pid: u32) -> Option<i32> {
     None

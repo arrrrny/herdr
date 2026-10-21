@@ -36,6 +36,36 @@ pub(crate) fn parse(value: &str) -> Result<i32, String> {
     }
 }
 
+/// Reports whether a program is reachable through the search path.
+///
+/// The launch line runs in the pane's shell, which inherits the server's
+/// environment, so the server's search path decides whether the program is
+/// found there.
+pub(crate) fn program_on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .any(|dir| is_executable(&dir.join(program)))
+}
+
+/// Reports whether a file exists and may be run.
+fn is_executable(path: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::metadata(path)
+            .map(|meta| meta.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
 /// Resolves the effective scheduling priority for a launch.
 ///
 /// A requested priority wins over the configured default, including an
@@ -105,5 +135,12 @@ mod tests {
     fn an_absent_request_falls_back_to_the_configured_default() {
         assert_eq!(resolve(None, 19), Some(19));
         assert_eq!(resolve(None, 0), None);
+    }
+
+    #[test]
+    fn a_program_that_is_not_on_the_search_path_is_reported_as_missing() {
+        assert!(!program_on_path(
+            "herdr-a-priority-program-that-does-not-exist"
+        ));
     }
 }

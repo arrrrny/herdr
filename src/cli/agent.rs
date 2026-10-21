@@ -335,6 +335,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
         timeout,
         &expected_kind,
         expected_terminal_id,
+        priority_program(&response),
     );
     match waited {
         Ok(Ok(agent)) => {
@@ -398,6 +399,7 @@ fn wait_for_named_agent(
     timeout: Duration,
     expected_kind: &str,
     expected_terminal_id: &str,
+    priority_program: Option<&str>,
 ) -> std::io::Result<Result<serde_json::Value, serde_json::Value>> {
     let deadline = Instant::now().checked_add(timeout);
     let mut first_poll = true;
@@ -406,7 +408,7 @@ fn wait_for_named_agent(
             // Let the server reconcile its matching startup deadline before
             // returning so the pending name is immediately reusable.
             let _ = resolve_agent_target_unchecked(name, "cli:agent:start:timeout");
-            return Ok(Err(agent_wait_timeout()));
+            return Ok(Err(agent_wait_timeout(priority_program)));
         }
         let poll_id = "cli:agent:start";
         let mut response = if first_poll {
@@ -441,7 +443,10 @@ fn wait_for_named_agent(
                 Some("blocked") => Some(Err(cli_agent_error(
                     "cli:agent:start",
                     "agent_not_ready",
-                    format!("agent {name} is blocked during startup and is not ready for prompts"),
+                    format!(
+                        "agent {name} is blocked during startup and is not ready for prompts{}",
+                        priority_program_hint(priority_program)
+                    ),
                 ))),
                 Some("unknown")
                     if expected_kind == "codex"
@@ -552,12 +557,37 @@ fn print_agent_transport_error(
     super::print_response(&cli_agent_error(request_id, code, err.to_string()))
 }
 
-fn agent_wait_timeout() -> serde_json::Value {
+fn agent_wait_timeout(priority_program: Option<&str>) -> serde_json::Value {
     cli_agent_error(
         "cli:agent:start",
         "timeout",
-        "timed out waiting for agent startup",
+        format!(
+            "timed out waiting for agent startup{}",
+            priority_program_hint(priority_program)
+        ),
     )
+}
+
+/// Returns the priority program the launch line named, if it named one.
+fn priority_program(response: &serde_json::Value) -> Option<&str> {
+    response["result"]["argv"]
+        .as_array()
+        .and_then(|argv| argv.first())
+        .and_then(|first| first.as_str())
+        .filter(|first| crate::platform::agent_nice_program() == Some(*first))
+}
+
+/// Names the priority program in a startup error, when the launch used one.
+///
+/// The launch line runs the program, so a pane whose search path lacks it
+/// never starts the agent. The operator needs to know which program it was.
+fn priority_program_hint(priority_program: Option<&str>) -> String {
+    match priority_program {
+        Some(program) => format!(
+            " (the launch used the {program} program, which the pane's shell may not have found on its search path)"
+        ),
+        None => String::new(),
+    }
 }
 
 fn cli_agent_error(id: &str, code: &str, message: impl Into<String>) -> serde_json::Value {

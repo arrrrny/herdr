@@ -170,11 +170,15 @@ fn run_cli_json(socket_path: &Path, args: &[&str]) -> serde_json::Value {
 /// The fake agent records the arguments it was called with, its own process
 /// id, and the process id of a child it forks, so a test can read the
 /// operating system's view of the priority independently of Herdr.
+///
+/// Without the `nice` shim the private directory holds only the agent, which
+/// is the search path of a host that has no priority program at all.
 fn install_fake_agent(
     base: &Path,
     args_file: &Path,
     pid_file: &Path,
     child_pid_file: &Path,
+    install_priority_program: bool,
 ) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -194,11 +198,13 @@ fn install_fake_agent(
     .unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
-    let nice = ["/usr/bin/nice", "/bin/nice"]
-        .iter()
-        .find(|candidate| Path::new(candidate).exists())
-        .expect("the host must provide a nice binary");
-    std::os::unix::fs::symlink(nice, bin.join("nice")).unwrap();
+    if install_priority_program {
+        let nice = ["/usr/bin/nice", "/bin/nice"]
+            .iter()
+            .find(|candidate| Path::new(candidate).exists())
+            .expect("the host must provide a nice binary");
+        std::os::unix::fs::symlink(nice, bin.join("nice")).unwrap();
+    }
     bin
 }
 
@@ -306,13 +312,28 @@ struct AgentFixture {
 
 impl AgentFixture {
     fn new() -> AgentFixture {
+        AgentFixture::with_priority_program(true)
+    }
+
+    /// A fixture whose private search path holds no priority program.
+    fn without_priority_program() -> AgentFixture {
+        AgentFixture::with_priority_program(false)
+    }
+
+    fn with_priority_program(install_priority_program: bool) -> AgentFixture {
         let base = unique_test_dir();
         let runtime_dir = base.join("runtime");
         let socket_path = runtime_dir.join("herdr.sock");
         let args_file = base.join("pi-args");
         let pid_file = base.join("pi-pid");
         let child_pid_file = base.join("pi-child-pid");
-        let bin = install_fake_agent(&base, &args_file, &pid_file, &child_pid_file);
+        let bin = install_fake_agent(
+            &base,
+            &args_file,
+            &pid_file,
+            &child_pid_file,
+            install_priority_program,
+        );
         AgentFixture {
             base,
             socket_path,
@@ -624,6 +645,43 @@ fn agent_start_passes_trailing_agent_arguments_with_a_priority() {
         ),
         "--name\nscratch\n--no-session\n"
     );
+
+    cleanup_spawned_herdr(herdr, fixture.base);
+}
+
+#[test]
+fn agent_start_reports_a_missing_priority_program() {
+    let _lock = test_lock();
+    let fixture = AgentFixture::without_priority_program();
+    let herdr = fixture.spawn();
+    let socket_path = fixture.socket_path.clone();
+    let pane_id = create_root_pane(&socket_path, &fixture.base);
+
+    let rejected = run_cli(
+        &socket_path,
+        &[
+            "agent", "start", "worker", "--kind", "pi", "--pane", &pane_id, "--nice", "19",
+        ],
+    );
+
+    assert!(!rejected.status.success());
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("agent_nice_unavailable"),
+        "must name the error: {stderr}"
+    );
+    assert!(
+        stderr.contains("nice"),
+        "must name the priority program: {stderr}"
+    );
+
+    // Nothing was started.
+    let listed = run_cli_json(&socket_path, &["agent", "list"]);
+    assert!(
+        listed["result"]["agents"].as_array().unwrap().is_empty(),
+        "no agent may have been started: {listed}"
+    );
+    assert!(!fixture.pid_file.exists(), "the agent must never have run");
 
     cleanup_spawned_herdr(herdr, fixture.base);
 }

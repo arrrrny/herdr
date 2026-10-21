@@ -354,6 +354,14 @@ pub(crate) fn agent_nice_prefix(nice: i32) -> Vec<String> {
     vec!["nice".to_string(), "-n".to_string(), nice.to_string()]
 }
 
+/// The program that applies a CPU scheduling priority, if the platform has one.
+///
+/// The launch line names this program, so a launch that cannot find it fails
+/// before the agent is started.
+pub(crate) fn agent_nice_program() -> Option<&'static str> {
+    Some("nice")
+}
+
 /// Reads the CPU scheduling priority the operating system applied to a process.
 pub fn process_nice(pid: u32) -> Option<i32> {
     if pid == 0 {

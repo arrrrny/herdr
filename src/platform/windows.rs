@@ -1676,6 +1676,11 @@ pub(crate) fn agent_nice_prefix(_nice: i32) -> Vec<String> {
     Vec::new()
 }
 
+/// Windows has no Unix scheduling priority, so no priority program is named.
+pub(crate) fn agent_nice_program() -> Option<&'static str> {
+    None
+}
+
 /// Windows reports a priority class rather than a Unix scheduling priority.
 pub fn process_nice(_pid: u32) -> Option<i32> {
     None

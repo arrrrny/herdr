@@ -1328,6 +1328,84 @@ fn agent_start_carries_the_scheduling_priority_over_the_socket() {
 }
 
 #[test]
+fn agent_start_rejects_an_out_of_range_priority_over_the_socket() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let bin = base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let fake_pi = bin.join("pi");
+    fs::write(&fake_pi, "#!/bin/sh\nHERDR_AGENT=pi exec /bin/sleep 20\n").unwrap();
+    fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
+    // The priority program is reachable, so the rejection below can only come
+    // from the value itself.
+    let nice = ["/usr/bin/nice", "/bin/nice"]
+        .iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .expect("the host must provide a nice binary");
+    std::os::unix::fs::symlink(nice, bin.join("nice")).unwrap();
+
+    let child = spawn_herdr_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+    let workspace = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "nice_range_workspace",
+            "method": "workspace.create",
+            "params": { "cwd": base.display().to_string(), "focus": false }
+        })
+        .to_string(),
+    );
+    let pane_id = workspace["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let rejected = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "agent_start_nice_out_of_range",
+            "method": "agent.start",
+            "params": {
+                "name": "main",
+                "kind": "pi",
+                "pane_id": pane_id,
+                "timeout_ms": 8_000,
+                "nice": 20
+            }
+        })
+        .to_string(),
+    );
+    assert_eq!(
+        rejected["error"]["code"], "invalid_agent_nice",
+        "response: {rejected}"
+    );
+    assert!(
+        rejected["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("20"),
+        "the message must name the value: {rejected}"
+    );
+
+    // No agent was started.
+    let listed = send_request(
+        &socket_path,
+        r#"{"id":"nice_range_agent_list","method":"agent.list","params":{}}"#,
+    );
+    assert!(
+        listed["result"]["agents"].as_array().unwrap().is_empty(),
+        "no agent may have been started: {listed}"
+    );
+
+    cleanup_spawned_herdr(child, base);
+}
+
+#[test]
 fn agent_methods_round_trip_over_socket() {
     let _lock = test_lock();
     let base = unique_test_dir();

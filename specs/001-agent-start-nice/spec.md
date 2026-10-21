@@ -110,8 +110,11 @@ pane's process information and confirm the reported priority matches.
 - The agent is resumed from a restored session rather than started fresh: the
   feature covers fresh launches only.
 - A platform where the priority program is not on the search path: the launch
-  fails with the operating system's own error, which is surfaced to the
-  operator.
+  is rejected before the agent starts, with an error that names the priority
+  program, so the operator sees which program was missing instead of a
+  readiness timeout. When the pane's own search path differs from the
+  server's, the operating system's own error still reaches the pane, and the
+  readiness error names the priority program as well.
 
 ## Requirements *(mandatory)*
 

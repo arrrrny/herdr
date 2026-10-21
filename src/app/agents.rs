@@ -51,6 +51,15 @@ pub(crate) fn agent_launch_argv(
     argv
 }
 
+/// Returns the priority program the launch line names, if it names one.
+fn priority_program(argv: &[String]) -> Option<&'static str> {
+    let program = crate::platform::agent_nice_program()?;
+    match argv.first() {
+        Some(first) if first == program => Some(program),
+        _ => None,
+    }
+}
+
 impl App {
     pub(super) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
         self.state
@@ -235,6 +244,14 @@ impl App {
             params.args,
             nice,
         );
+        // The launch line names the priority program, so the pane's shell has
+        // to find it. A missing program is reported instead of leaving the
+        // operator with a launch that times out.
+        if let Some(program) = priority_program(&argv) {
+            if !crate::agent_priority::program_on_path(program) {
+                return Err(AgentStartError::NiceUnavailable(program.to_string()));
+            }
+        }
         let command = crate::platform::interactive_shell_command(&argv, &shell_name)
             .ok_or(AgentStartError::InvalidArgument)?;
         let bytes = crate::app::api_helpers::encode_api_submission(runtime, &command);
@@ -301,6 +318,12 @@ impl App {
                     "agent nice value {nice} is outside the supported range {}..={}",
                     crate::agent_priority::MIN,
                     crate::agent_priority::MAX
+                ),
+            },
+            AgentStartError::NiceUnavailable(program) => crate::api::schema::ErrorBody {
+                code: "agent_nice_unavailable".into(),
+                message: format!(
+                    "the {program} program is not on the search path, so the agent was not started"
                 ),
             },
             AgentStartError::TargetNotFound(target) => crate::api::schema::ErrorBody {
@@ -503,6 +526,7 @@ pub(super) enum AgentStartError {
     InvalidArgument,
     InvalidTimeout,
     InvalidNice(i32),
+    NiceUnavailable(String),
     TargetNotFound(String),
     TargetBusy(String),
     TargetUnavailable(String),

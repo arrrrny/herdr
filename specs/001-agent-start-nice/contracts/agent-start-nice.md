@@ -80,6 +80,8 @@ The agent-start request gains one optional field.
 - Absent means "use the configured default".
 - A value outside the range is rejected by the server with an error response,
   because the request may come from a client that is not the Herdr CLI.
+- A launch whose priority program is not on the server's search path is
+  rejected with `agent_nice_unavailable` and no agent is started.
 - A client that predates this field sends no `nice` and is unaffected.
 
 ### Response
