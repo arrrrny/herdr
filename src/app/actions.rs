@@ -3007,6 +3007,43 @@ mod tests {
         assert_eq!(state.workspaces.len(), 1);
         state.assert_invariants_for_test();
     }
+
+    #[test]
+    fn pane_died_clears_stale_managed_agent_name_on_surviving_terminal() {
+        let mut state = app_with_workspaces(&["test"]);
+        let first_id = *state.workspaces[0].panes.keys().next().unwrap();
+        let second_id = state.workspaces[0].test_split(Direction::Horizontal);
+        state.ensure_test_terminals();
+
+        // Two panes sharing one terminal: when one pane dies the terminal
+        // survives (still attached), so its stale managed-agent name must be
+        // cleared instead of pinning `agent_name_taken` for the next start
+        // with the same name.
+        let shared_terminal_id = state.terminal_id_for_pane(0, first_id).unwrap();
+        for pane in state.workspaces[0].panes.values_mut() {
+            pane.attached_terminal_id = shared_terminal_id.clone();
+        }
+
+        state
+            .terminals
+            .get_mut(&shared_terminal_id)
+            .unwrap()
+            .set_agent_name("stale-agent".to_owned());
+
+        state.handle_pane_died(second_id);
+
+        assert!(state.workspaces[0].panes.contains_key(&first_id));
+        let terminal = state
+            .terminals
+            .get(&shared_terminal_id)
+            .expect("terminal survives while another pane still attaches it");
+        assert!(
+            terminal.agent_name.is_none(),
+            "pane death must clear the stale managed-agent name"
+        );
+        state.assert_invariants_for_test();
+    }
+
     #[test]
     fn state_changed_updates_pane() {
         let mut state = app_with_workspaces(&["test"]);

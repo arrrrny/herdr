@@ -412,9 +412,12 @@ fn wait_for_named_agent(
             // the next attempt with the same name).
             let release_deadline = Instant::now() + Duration::from_secs(1);
             while Instant::now() < release_deadline {
-                let _ = resolve_agent_target_unchecked(name, "cli:agent:start:timeout");
-                // Reconcile again; if the name is no longer resolvable the
-                // server has released it.
+                // Reconcile; if the name is no longer resolvable (an error
+                // response) the server has released it. Transport failures
+                // also end the wait (`.unwrap_or(true)`): this is a bounded
+                // best-effort wait, so the CLI must not hang on a dead server
+                // even if a later start with the same name can still hit
+                // `agent_name_taken`.
                 if resolve_agent_target_unchecked(name, "cli:agent:start:timeout")
                     .map(|r| r.get("error").is_some())
                     .unwrap_or(true)
@@ -667,4 +670,102 @@ fn agent_read(params: AgentReadParams) -> std::io::Result<i32> {
         method: Method::AgentRead(params),
     })?;
     super::print_read_response(&response)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::process_info_shows_shell_initialization;
+    use serde_json::json;
+
+    fn shell_process(pid: u64, name: &str) -> serde_json::Value {
+        json!({ "pid": pid, "name": name, "argv": [name] })
+    }
+
+    fn process_info(
+        shell_pid: Option<u64>,
+        fg_pgid: Option<u64>,
+        foreground_processes: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut info = serde_json::Map::new();
+        if let Some(pid) = shell_pid {
+            info.insert("shell_pid".into(), json!(pid));
+        }
+        if let Some(pgid) = fg_pgid {
+            info.insert("foreground_process_group_id".into(), json!(pgid));
+        }
+        if let Some(processes) = foreground_processes {
+            info.insert("foreground_processes".into(), processes);
+        }
+        serde_json::Value::Object(info)
+    }
+
+    #[test]
+    fn initialization_true_when_fg_pgid_missing_zero_or_matches_shell_pid() {
+        // A freshly spawned shell may not have settled its foreground
+        // process group yet: missing or zero fg pgid, or the fg pgid still
+        // being the shell's own, reads as "still initializing".
+        for fg_pgid in [None, Some(0), Some(4242)] {
+            let info = process_info(
+                Some(4242),
+                fg_pgid,
+                Some(json!([shell_process(4242, "zsh")])),
+            );
+            assert!(
+                process_info_shows_shell_initialization(&info),
+                "fg pgid {fg_pgid:?} must read as still initializing"
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_true_when_foreground_processes_absent_or_empty() {
+        // Empty or absent foreground process info means the pane's process
+        // table is not populated yet: still initializing, so the busy-retry
+        // loop keeps waiting (up to PANE_SHELL_READINESS_RETRY_TIMEOUT)
+        // instead of failing fast with agent_pane_busy.
+        for processes in [None, Some(json!([]))] {
+            let info = process_info(Some(4242), Some(0), processes.clone());
+            assert!(
+                process_info_shows_shell_initialization(&info),
+                "foreground_processes {processes:?} must read as still initializing"
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_false_when_foreign_fg_pgid_owns_the_foreground() {
+        let info = process_info(
+            Some(4242),
+            Some(5000),
+            Some(json!([shell_process(5000, "vim")])),
+        );
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_false_when_shell_pid_missing() {
+        let info = process_info(None, Some(0), Some(json!([])));
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_false_when_shell_missing_from_populated_foreground_processes() {
+        let info = process_info(
+            Some(4242),
+            Some(0),
+            Some(json!([shell_process(5000, "make")])),
+        );
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_true_when_login_shell_listed_by_argv0() {
+        // `-zsh` (login-shell argv0) normalizes to `zsh`.
+        let info = process_info(
+            Some(4242),
+            None,
+            Some(json!([{ "pid": 4242, "name": "zsh", "argv": ["-zsh"] }])),
+        );
+        assert!(process_info_shows_shell_initialization(&info));
+    }
 }

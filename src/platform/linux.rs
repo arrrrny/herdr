@@ -405,6 +405,13 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
     // A freshly spawned shell may not have settled its foreground process
     // group yet. Fall back to the child process itself: if it is a recognized
     // pane shell, treat the pane as available (idle) instead of busy.
+    //
+    // `foreground_job` also returns None when the foreground pgid exists but
+    // its member enumeration transiently failed, not only when the pgid is
+    // unset. That narrow race is accepted on purpose (mirrors
+    // src/platform/macos.rs): a pane genuinely owned by a full-screen app
+    // could be declared available here, and availability is preferred over
+    // the far more common false "busy".
     let (name, _) = process_name_and_parent(child_pid)?;
     if super::is_pane_shell_process_name(&name) {
         Some(name)

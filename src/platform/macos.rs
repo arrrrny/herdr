@@ -457,6 +457,15 @@ pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
     // back to inspecting the child process itself: if it is a recognized pane
     // shell, treat the pane as available (idle) so callers can proceed or
     // retry until the process group settles.
+    //
+    // `foreground_job` also returns None when the foreground pgid exists but
+    // its member enumeration transiently failed (an empty process list), not
+    // only when the pgid is unset. That narrow race is accepted on purpose:
+    // a pane genuinely owned by a full-screen app could be declared
+    // available here. The false "busy" this fallback removes is far more
+    // common than a transient `proc_listpids`/`proc_pidinfo` failure, so
+    // prefer availability (see the assessment's risk note under
+    // .specify/bugs/agent-start-fails-on-freshly-created-panes/).
     let info = process_bsdinfo(child_pid)?;
     let name = comm_from_bsdinfo(&info)?;
     if super::is_pane_shell_process_name(&name) {
