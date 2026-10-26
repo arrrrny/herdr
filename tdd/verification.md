@@ -2,7 +2,7 @@
 feature: 83-ci-conventional-commits-fails-on-every-pr-merge-into-master
 verdict: PASS_WITH_GAPS
 standard: .specify/extensions/tdd/templates/tdd-test-quality-rubric.md # rubric graded against
-verified_at: 8a9b2d88 # short SHA audited (HEAD of master history + uncommitted fix branch work)
+verified_at: 0d88f39 # commit under review (branch head); the review-fixes commit on top adds the Reapply cases and reruns the same suites
 behaviors: 2
 proven: 1
 likely: 1
@@ -11,17 +11,17 @@ no_test: 0
 high_smells: 0
 criteria_total: 4
 criteria_covered: 4
-mutation_score: 100 # scope: scripts/conventional_commits.py only, 4 deliberate mutants (no mutation tool configured for Python in this repo), all killed
+mutation_score: 100 # scope: scripts/conventional_commits.py only, 5 deliberate mutants (no mutation tool configured for Python in this repo), all killed
 mutants_survived: 0
-suite: 11 passed, 0 failed (scripts.test_conventional_commits, 0.28s); 206 passed, 0 failed (maintenance-test unittest neighbours, 41.9s)
-verified_utc: 2026-10-26T22:27:27Z
+suite: 14 passed, 0 failed (scripts.test_conventional_commits, 1.8s); 210 passed, 0 failed (maintenance-test unittest neighbours, 21.4s)
+verified_utc: 2026-10-26T22:48:39Z
 ---
 
 # TDD Verification: ci conventional-commits merge-subject exemption (#83)
 
 **Verdict: PASS_WITH_GAPS.** Every acceptance criterion has a test through the
 real entry point (the script invoked exactly as CI invokes it), no HIGH smells,
-and all 4 deliberate mutants were killed. The gap: the test-first red for the
+and all 5 deliberate mutants were killed. The gap: the test-first red for the
 new behavior is recorded in the work-order session (quoted below), not in a
 committed cycle-log artifact, and the fix and its tests land in a single commit,
 so git history alone cannot corroborate the ordering.
@@ -37,7 +37,7 @@ was changed.
 
 | Behavior | Class  | Evidence                                                                                                                        |
 | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| B1: git-generated merge/revert subjects are exempt from validation | LIKELY | Red recorded before the fix: pre-fix run of the real script on a real merge range printed `invalid commit subject(s): Merge branch 'feat/widget'` and exited 1; the same range exits 0 post-fix (commands and outputs quoted below). No cycle-log file exists for work-order chores; test and source land in one commit, so history cannot corroborate order independently |
+| B1: git-generated merge/revert/reapply subjects are exempt from validation | LIKELY | Red recorded before the fix: pre-fix run of the real script on a real merge range printed `invalid commit subject(s): Merge branch 'feat/widget'` and exited 1; the same range exits 0 post-fix (commands and outputs quoted below). The `Reapply "<subject>"` form was added in the review-fixes commit and is pinned the same way — a real revert of a revert inside the `--range` test, with both generated subjects asserted. No cycle-log file exists for work-order chores; test and source land in one commit, so history cannot corroborate order independently |
 | B2: author-typed non-conventional subjects still fail | PROVEN | Behavior pre-exists the change; pinned by two tests at the real entry point; both author-subject mutants killed in the mutation pass; full neighbour suite green after the change |
 
 Red-phase record (session, pre-fix, repository `/tmp/repro-83`, before any
@@ -107,19 +107,20 @@ intended fix).
 | ------ | -------- | -------- | -------- |
 | `EXEMPT_SUBJECT_PREFIXES` drops `"Merge "` (Revert-only exemption) | B1 | No | Killed: `test_merge_commit_subjects_pass_range_validation` and the merge-form predicate tests fail |
 | `EXEMPT_SUBJECT_PREFIXES` drops `'Revert "'` (Merge-only exemption) | B1 | No | Killed: `test_git_revert_default_title_passes` and the revert predicate assertion fail |
+| `EXEMPT_SUBJECT_PREFIXES` drops `'Reapply "'` (revert-of-a-revert exemption) | B1 | No | Killed in the review-fixes pass: `test_git_generated_merge_revert_and_reapply_forms_are_exempt`, `test_repeated_revert_forms_are_exempt`, `test_git_reapply_default_title_passes`, and `test_revert_of_a_revert_passes_range_validation` all fail (4 failures, file restored byte-identical) |
 | `exempt_subject()` returns `False` (exemption disabled) | B1 | No | Killed: same merge-form entry-point tests fail |
 | `exempt_subject()` returns `True` (swallows every subject) | B2, B1 | No | Killed: `test_author_subject_still_fails_range_validation`, `test_non_conventional_title_still_fails`, `test_author_typed_subjects_are_not_exempt` fail |
 
-Sampled: all 4 risk-bearing points of the changed code (the prefix tuple's two
+Sampled: all 5 risk-bearing points of the changed code (the prefix tuple's three
 elements and the predicate's two degenerate forms); this is exhaustive for the
-diff, not a sample. Score: 4/4 killed, 0 survived.
+diff, not a sample. Score: 5/5 killed, 0 survived.
 
 ## Traceability: criteria to tests
 
 | Criterion (from issue #83) | Tests | End to end |
 | -------------------------- | ----- | ---------- |
 | AC-1: `--range` push validation does not fail on git-generated merge subjects (`Merge pull request #NN from …`, `Merge remote-tracking branch …`, `Merge branch '…'`) | `RangeValidationTests.test_merge_commit_subjects_pass_range_validation`, `SubjectArgumentTests.test_pr_merge_default_title_passes` | Yes — real script, real git repo with real merge commits, invoked as CI invokes it |
-| AC-2: `Revert "<subject>"` git-generated form is exempt | `ExemptSubjectTests.test_git_generated_merge_and_revert_forms_are_exempt`, `SubjectArgumentTests.test_git_revert_default_title_passes` | Yes at the CLI entry point; the range path shares the same `main()` filter |
+| AC-2: `Revert "<subject>"` and `Reapply "<subject>"` git-generated forms are exempt | `ExemptSubjectTests.test_git_generated_merge_revert_and_reapply_forms_are_exempt`, `ExemptSubjectTests.test_repeated_revert_forms_are_exempt`, `SubjectArgumentTests.test_git_revert_default_title_passes`, `SubjectArgumentTests.test_git_reapply_default_title_passes`, `RangeValidationTests.test_revert_of_a_revert_passes_range_validation` | Yes at the CLI entry point and through `--range` over a real revert of a revert; the range path shares the same `main()` filter |
 | AC-3: author-typed non-conventional subjects still fail (preview-note hygiene preserved) | `RangeValidationTests.test_author_subject_still_fails_range_validation`, `SubjectArgumentTests.test_non_conventional_title_still_fails`, `ExemptSubjectTests.test_author_typed_subjects_are_not_exempt` | Yes |
 | AC-4: conventional subjects remain valid in every path | `ValidSubjectTests.test_conventional_subjects_are_valid`, `MessageFileTests.test_message_file_first_subject_is_read`, plus conventional commits inside the AC-1 end-to-end range | Yes |
 

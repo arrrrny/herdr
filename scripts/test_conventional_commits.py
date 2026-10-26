@@ -24,6 +24,7 @@ MERGE_FORMS = [
     "Merge tag 'v1.2.3'",
 ]
 REVERT_FORM = 'Revert "feat: add widget"'
+REAPPLY_FORM = 'Reapply "feat: add widget"'
 
 
 def run_script(*argv: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -33,8 +34,19 @@ def run_script(*argv: str, cwd: Path | None = None) -> subprocess.CompletedProce
 
 
 class ExemptSubjectTests(unittest.TestCase):
-    def test_git_generated_merge_and_revert_forms_are_exempt(self) -> None:
-        for subject in [*MERGE_FORMS, REVERT_FORM]:
+    def test_git_generated_merge_revert_and_reapply_forms_are_exempt(self) -> None:
+        for subject in [*MERGE_FORMS, REVERT_FORM, REAPPLY_FORM]:
+            with self.subTest(subject=subject):
+                self.assertTrue(exempt_subject(subject))
+
+    def test_repeated_revert_forms_are_exempt(self) -> None:
+        # git alternates the two prefixes down a revert chain: reverting a
+        # revert writes `Reapply "<subject>"`, and reverting that quotes the
+        # whole thing again (verified on git 2.55.0).
+        for subject in [
+            'Revert "Reapply "feat: add widget""',
+            'Reapply "Reapply "feat: add widget""',
+        ]:
             with self.subTest(subject=subject):
                 self.assertTrue(exempt_subject(subject))
 
@@ -46,6 +58,8 @@ class ExemptSubjectTests(unittest.TestCase):
             "merge branch 'x'",
             # git revert always quotes the reverted subject.
             "Revert feat: add widget",
+            # Same for a revert of a revert.
+            "Reapply feat: add widget",
             # A conventional subject is never exempt.
             "fix: merge branch handling",
         ]:
@@ -76,6 +90,10 @@ class SubjectArgumentTests(unittest.TestCase):
 
     def test_git_revert_default_title_passes(self) -> None:
         result = run_script(REVERT_FORM)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_git_reapply_default_title_passes(self) -> None:
+        result = run_script(REAPPLY_FORM)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_non_conventional_title_still_fails(self) -> None:
@@ -141,6 +159,27 @@ class RangeValidationTests(unittest.TestCase):
         self._git(
             "commit", "-q", "--allow-empty", "-m",
             "Merge remote-tracking branch 'origin/master' into sync/fork-sync-resolution-2026-10-15",
+        )
+        after = self._git("rev-parse", "HEAD")
+
+        result = run_script("--range", f"{before}..{after}", cwd=self.repo)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_revert_of_a_revert_passes_range_validation(self) -> None:
+        self._commit_file("a.txt", "chore: initial")
+        before = self._git("rev-parse", "HEAD")
+        self._commit_file("c.txt", "feat: add revertible widget")
+        # A revert of a revert is another commit git writes for you; the
+        # push job must not fail on the `Reapply "<subject>"` it emits.
+        self._git("revert", "--no-edit", "HEAD")
+        self.assertEqual(
+            self._git("log", "--pretty=%s", "-1"),
+            'Revert "feat: add revertible widget"',
+        )
+        self._git("revert", "--no-edit", "HEAD")
+        self.assertEqual(
+            self._git("log", "--pretty=%s", "-1"),
+            'Reapply "feat: add revertible widget"',
         )
         after = self._git("rev-parse", "HEAD")
 
