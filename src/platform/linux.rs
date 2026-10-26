@@ -399,7 +399,18 @@ fn shell_quote(value: &str) -> String {
 
 /// Collect the foreground terminal job for a given child PID.
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
-    super::available_pane_shell_from_job(child_pid, foreground_job(child_pid)?)
+    if let Some(job) = foreground_job(child_pid) {
+        return super::available_pane_shell_from_job(child_pid, job);
+    }
+    // A freshly spawned shell may not have settled its foreground process
+    // group yet. Fall back to the child process itself: if it is a recognized
+    // pane shell, treat the pane as available (idle) instead of busy.
+    let (name, _) = process_name_and_parent(child_pid)?;
+    if super::is_pane_shell_process_name(&name) {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {

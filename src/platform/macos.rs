@@ -447,7 +447,23 @@ fn target_nofile_soft_limit(
 }
 
 pub(crate) fn available_pane_shell(child_pid: u32) -> Option<String> {
-    super::available_pane_shell_from_job(child_pid, foreground_job(child_pid)?)
+    if let Some(job) = foreground_job(child_pid) {
+        return super::available_pane_shell_from_job(child_pid, job);
+    }
+    // A freshly spawned shell may not have settled its foreground process
+    // group yet (e_tpgid reads 0 / is not yet the shell's own pgid). In that
+    // window `foreground_job` returns None, which used to be reported as
+    // "busy" and blocked `agent start` on panes sitting at their prompt. Fall
+    // back to inspecting the child process itself: if it is a recognized pane
+    // shell, treat the pane as available (idle) so callers can proceed or
+    // retry until the process group settles.
+    let info = process_bsdinfo(child_pid)?;
+    let name = comm_from_bsdinfo(&info)?;
+    if super::is_pane_shell_process_name(&name) {
+        Some(name)
+    } else {
+        None
+    }
 }
 
 /// Collect the foreground terminal job for a given child PID.

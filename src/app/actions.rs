@@ -2070,6 +2070,14 @@ impl AppState {
         };
 
         let pane_terminal_id = self.terminal_id_for_pane(ws_idx, pane_id);
+        // A dying pane must not leave a stale managed-agent name behind:
+        // otherwise a later `agent start` with the same name reports
+        // `agent_name_taken` even though the pane (and its agent) is gone.
+        if let Some(terminal_id) = pane_terminal_id.as_ref() {
+            if let Some(terminal) = self.terminals.get_mut(terminal_id) {
+                terminal.clear_agent_name();
+            }
+        }
         let workspace_terminal_ids = self.terminal_ids_for_workspace(ws_idx);
         self.pane_id_aliases.retain(|_, alias| *alias != pane_id);
         self.public_pane_id_aliases

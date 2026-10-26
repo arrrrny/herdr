@@ -406,8 +406,23 @@ fn wait_for_named_agent(
     loop {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             // Let the server reconcile its matching startup deadline before
-            // returning so the pending name is immediately reusable.
-            let _ = resolve_agent_target_unchecked(name, "cli:agent:start:timeout");
+            // returning so the pending name is immediately reusable. Poll for
+            // up to ~1s so a server whose clock lags the client's actually
+            // releases the name before we return (avoids `agent_name_taken` on
+            // the next attempt with the same name).
+            let release_deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < release_deadline {
+                let _ = resolve_agent_target_unchecked(name, "cli:agent:start:timeout");
+                // Reconcile again; if the name is no longer resolvable the
+                // server has released it.
+                if resolve_agent_target_unchecked(name, "cli:agent:start:timeout")
+                    .map(|r| r.get("error").is_some())
+                    .unwrap_or(true)
+                {
+                    break;
+                }
+                std::thread::sleep(AGENT_START_POLL_INTERVAL);
+            }
             return Ok(Err(agent_wait_timeout(priority_program)));
         }
         let poll_id = "cli:agent:start";
@@ -504,24 +519,31 @@ fn process_info_shows_shell_initialization(process_info: &serde_json::Value) -> 
     let Some(shell_pid) = process_info["shell_pid"].as_u64() else {
         return false;
     };
-    if process_info["foreground_process_group_id"].as_u64() != Some(shell_pid) {
-        return false;
+    // A freshly spawned shell may not have settled its foreground process
+    // group yet, so foreground_process_group_id can be missing or 0. Treat
+    // that as "still initializing" rather than "not a shell" so the retry
+    // loop waits for the process group to settle instead of giving up.
+    match process_info["foreground_process_group_id"].as_u64() {
+        Some(fg) if fg != 0 && fg != shell_pid => return false,
+        _ => {}
     }
-    process_info["foreground_processes"]
-        .as_array()
-        .is_some_and(|processes| {
-            processes.iter().any(|process| {
-                process["pid"].as_u64() == Some(shell_pid)
-                    && (process["name"]
-                        .as_str()
-                        .is_some_and(crate::platform::is_pane_shell_process_name)
-                        || process["argv"]
-                            .as_array()
-                            .and_then(|argv| argv.first())
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(crate::platform::is_pane_shell_process_name))
-            })
-        })
+    // If foreground process info is present, require the shell to be among
+    // them; if it is absent entirely (not yet populated), still treat as
+    // initializing so the retry loop can wait.
+    match process_info["foreground_processes"].as_array() {
+        Some(processes) if !processes.is_empty() => processes.iter().any(|process| {
+            process["pid"].as_u64() == Some(shell_pid)
+                && (process["name"]
+                    .as_str()
+                    .is_some_and(crate::platform::is_pane_shell_process_name)
+                    || process["argv"]
+                        .as_array()
+                        .and_then(|argv| argv.first())
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(crate::platform::is_pane_shell_process_name))
+        }),
+        _ => true,
+    }
 }
 
 // Windows exposes no foreground process group, so shell initialization is not
