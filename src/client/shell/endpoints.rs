@@ -102,6 +102,7 @@ impl ClientShellState {
                 .any(|endpoint| &endpoint.endpoint_id == endpoint_id)
         });
         self.endpoints = next;
+        self.sync_local_endpoint_label();
     }
 
     pub(crate) fn select_unavailable_local(&mut self) {
@@ -474,11 +475,19 @@ impl ClientShellState {
         &self.active_endpoint_id == endpoint_id
     }
 
-    /// Resolves a saved-machine selector (profile ID or label) to an attached endpoint.
+    /// Resolves a machine selector (profile ID, saved label, or the stable
+    /// `local` token) to an attached endpoint.
     pub(crate) fn endpoint_for_machine_selector(&self, selector: &str) -> Option<ClientEndpointId> {
         let selector = selector.trim();
         if selector.is_empty() {
             return None;
+        }
+        if selector.eq_ignore_ascii_case("local") {
+            return self
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_id.is_local())
+                .then_some(ClientEndpointId::Local);
         }
         if let Ok(profile_id) = crate::client::endpoint::ProfileId::parse(selector) {
             let endpoint_id = ClientEndpointId::Ssh(profile_id);
@@ -802,7 +811,7 @@ pub(super) fn endpoint_status_presentation(
 pub(super) fn local_endpoint() -> ClientShellEndpoint {
     ClientShellEndpoint {
         endpoint_id: ClientEndpointId::Local,
-        label: "Local".into(),
+        label: crate::config::DEFAULT_LOCAL_MACHINE_LABEL.into(),
         status: ClientEndpointStatus::Online,
         snapshot: None,
         snapshot_generation: None,

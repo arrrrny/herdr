@@ -5,8 +5,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
     ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_LOCAL_MACHINE_LABEL,
+    DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -1014,6 +1014,8 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// Sidebar label for the local machine. Blank values fall back to "Local".
+    pub local_machine_label: String,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1249,6 +1251,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            local_machine_label: DEFAULT_LOCAL_MACHINE_LABEL.to_owned(),
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1262,6 +1265,23 @@ impl UiConfig {
         self.mouse_scroll_lines
             .map(NonZeroUsize::get)
             .unwrap_or(DEFAULT_MOUSE_SCROLL_LINES)
+    }
+
+    /// Sidebar label for the local machine, trimmed. An empty or control-only
+    /// value keeps "Local"; control characters would break the single sidebar
+    /// row that renders it, so they are dropped like saved SSH labels reject them.
+    pub fn local_machine_label_trimmed(&self) -> String {
+        let label: String = self
+            .local_machine_label
+            .trim()
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        if label.is_empty() {
+            DEFAULT_LOCAL_MACHINE_LABEL.to_owned()
+        } else {
+            label
+        }
     }
 
     pub fn right_click_passthrough_modifiers(&self) -> Option<KeyModifiers> {
@@ -1729,6 +1749,37 @@ sidebar_start_collapsed = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sidebar_start_collapsed);
+    }
+
+    #[test]
+    fn local_machine_label_defaults_to_local_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(default_config.ui.local_machine_label_trimmed(), "Local");
+
+        let toml = r#"
+[ui]
+local_machine_label = "i9"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ui.local_machine_label_trimmed(), "i9");
+
+        let blank: Config = toml::from_str(
+            r#"
+[ui]
+local_machine_label = "   "
+"#,
+        )
+        .unwrap();
+        assert_eq!(blank.ui.local_machine_label_trimmed(), "Local");
+
+        let control: Config = toml::from_str(
+            r#"
+[ui]
+local_machine_label = "a\nb"
+"#,
+        )
+        .unwrap();
+        assert_eq!(control.ui.local_machine_label_trimmed(), "ab");
     }
 
     #[test]

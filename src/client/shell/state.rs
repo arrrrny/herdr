@@ -25,6 +25,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) local_machine_label: String,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -1035,6 +1036,8 @@ impl ClientShellState {
                 .or_default()
                 .extend(saved.collapsed_groups);
         }
+        let mut local_machine_endpoint = local_endpoint();
+        local_machine_endpoint.label = config.local_machine_label.clone();
         Self {
             machine_diagnostics: Default::default(),
             config,
@@ -1076,7 +1079,7 @@ impl ClientShellState {
             last_composed_at: None,
             selection_repaint_deadline: None,
             hits: ShellHitMap::default(),
-            endpoints: vec![local_endpoint()],
+            endpoints: vec![local_machine_endpoint],
             active_endpoint_id: ClientEndpointId::Local,
             collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,

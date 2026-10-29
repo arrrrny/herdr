@@ -1067,6 +1067,12 @@
           ]
         },
         {
+          "key": "ui.local_machine_label",
+          "type": "string",
+          "default": "Local",
+          "description": "Sidebar label for the local machine. Rename it to match a named machine fleet. Blank values fall back to Local. Sidebar token rules and machine selectors compare this label, so rules written for Local stop matching once it is renamed."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",
