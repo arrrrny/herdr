@@ -46,13 +46,12 @@ pub(crate) enum ClientEndpointFocusTarget {
 impl ClientShellState {
     pub(crate) fn set_endpoint_catalog(&mut self, profiles: &[SavedSshEndpoint]) {
         let mut next = Vec::with_capacity(profiles.len().saturating_add(1));
-        let mut local = self
+        let local = self
             .endpoints
             .iter()
             .find(|endpoint| endpoint.endpoint_id.is_local())
             .cloned()
             .unwrap_or_else(local_endpoint);
-        local.label = self.config.local_machine_label.clone();
         next.push(local);
         for profile in profiles {
             let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
@@ -103,6 +102,7 @@ impl ClientShellState {
                 .any(|endpoint| &endpoint.endpoint_id == endpoint_id)
         });
         self.endpoints = next;
+        self.sync_local_endpoint_label();
     }
 
     pub(crate) fn select_unavailable_local(&mut self) {
@@ -475,11 +475,19 @@ impl ClientShellState {
         &self.active_endpoint_id == endpoint_id
     }
 
-    /// Resolves a saved-machine selector (profile ID or label) to an attached endpoint.
+    /// Resolves a machine selector (profile ID, saved label, or the stable
+    /// `local` token) to an attached endpoint.
     pub(crate) fn endpoint_for_machine_selector(&self, selector: &str) -> Option<ClientEndpointId> {
         let selector = selector.trim();
         if selector.is_empty() {
             return None;
+        }
+        if selector.eq_ignore_ascii_case("local") {
+            return self
+                .endpoints
+                .iter()
+                .any(|endpoint| endpoint.endpoint_id.is_local())
+                .then_some(ClientEndpointId::Local);
         }
         if let Ok(profile_id) = crate::client::endpoint::ProfileId::parse(selector) {
             let endpoint_id = ClientEndpointId::Ssh(profile_id);

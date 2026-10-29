@@ -974,11 +974,18 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
 
 #[test]
 fn local_machine_label_from_config_replaces_the_default_local_label() {
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentSidebarToken;
+
     let mut config = Config::default();
     config.ui.local_machine_label = "i9".into();
+    config.ui.sidebar.agents.rows =
+        vec![vec![AgentSidebarToken::Machine, AgentSidebarToken::Agent]];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_endpoint_catalog(&[remote_profile()]);
-    state.set_snapshot(Box::new(snapshot()));
+    let mut labeled_snapshot = snapshot();
+    labeled_snapshot.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    state.set_snapshot(Box::new(labeled_snapshot));
     state.set_pane_surface(surface());
     let frame = state.compose(100, 28).expect("labeled endpoint frame");
     let local = state
@@ -994,6 +1001,34 @@ fn local_machine_label_from_config_replaces_the_default_local_label() {
         .collect::<String>();
     assert!(row.contains("i9"), "{row}");
     assert!(!row.contains("Local"), "{row}");
+
+    let text = frame_rows(&frame).join("\n");
+    assert!(
+        text.contains("i9 · local agent"),
+        "machine token follows the configured label: {text}"
+    );
+    assert!(
+        text.contains("new · i9"),
+        "active-machine footer follows the configured label: {text}"
+    );
+}
+
+#[test]
+fn machine_selector_local_token_resolves_after_label_rename() {
+    let mut config = Config::default();
+    config.ui.local_machine_label = "i9".into();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_endpoint_catalog(&[remote_profile()]);
+
+    let local = state
+        .endpoint_for_machine_selector("local")
+        .expect("stable local token");
+    assert!(local.is_local());
+
+    let remote = state
+        .endpoint_for_machine_selector("Build")
+        .expect("saved profile label");
+    assert!(!remote.is_local());
 }
 
 #[test]

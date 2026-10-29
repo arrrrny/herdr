@@ -1267,11 +1267,18 @@ impl UiConfig {
             .unwrap_or(DEFAULT_MOUSE_SCROLL_LINES)
     }
 
-    /// Sidebar label for the local machine, trimmed. An empty value keeps "Local".
-    pub fn local_machine_label(&self) -> &str {
-        let label = self.local_machine_label.trim();
+    /// Sidebar label for the local machine, trimmed. An empty or control-only
+    /// value keeps "Local"; control characters would break the single sidebar
+    /// row that renders it, so they are dropped like saved SSH labels reject them.
+    pub fn local_machine_label_trimmed(&self) -> String {
+        let label: String = self
+            .local_machine_label
+            .trim()
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
         if label.is_empty() {
-            DEFAULT_LOCAL_MACHINE_LABEL
+            DEFAULT_LOCAL_MACHINE_LABEL.to_owned()
         } else {
             label
         }
@@ -1747,14 +1754,14 @@ sidebar_start_collapsed = true
     #[test]
     fn local_machine_label_defaults_to_local_and_parses() {
         let default_config = Config::default();
-        assert_eq!(default_config.ui.local_machine_label(), "Local");
+        assert_eq!(default_config.ui.local_machine_label_trimmed(), "Local");
 
         let toml = r#"
 [ui]
 local_machine_label = "i9"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.local_machine_label(), "i9");
+        assert_eq!(config.ui.local_machine_label_trimmed(), "i9");
 
         let blank: Config = toml::from_str(
             r#"
@@ -1763,7 +1770,16 @@ local_machine_label = "   "
 "#,
         )
         .unwrap();
-        assert_eq!(blank.ui.local_machine_label(), "Local");
+        assert_eq!(blank.ui.local_machine_label_trimmed(), "Local");
+
+        let control: Config = toml::from_str(
+            r#"
+[ui]
+local_machine_label = "a\nb"
+"#,
+        )
+        .unwrap();
+        assert_eq!(control.ui.local_machine_label_trimmed(), "ab");
     }
 
     #[test]
