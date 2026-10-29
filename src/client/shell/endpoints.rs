@@ -46,12 +46,13 @@ pub(crate) enum ClientEndpointFocusTarget {
 impl ClientShellState {
     pub(crate) fn set_endpoint_catalog(&mut self, profiles: &[SavedSshEndpoint]) {
         let mut next = Vec::with_capacity(profiles.len().saturating_add(1));
-        let local = self
+        let mut local = self
             .endpoints
             .iter()
             .find(|endpoint| endpoint.endpoint_id.is_local())
             .cloned()
             .unwrap_or_else(local_endpoint);
+        local.label = self.config.local_machine_label.clone();
         next.push(local);
         for profile in profiles {
             let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
@@ -802,7 +803,7 @@ pub(super) fn endpoint_status_presentation(
 pub(super) fn local_endpoint() -> ClientShellEndpoint {
     ClientShellEndpoint {
         endpoint_id: ClientEndpointId::Local,
-        label: "Local".into(),
+        label: crate::config::DEFAULT_LOCAL_MACHINE_LABEL.into(),
         status: ClientEndpointStatus::Online,
         snapshot: None,
         snapshot_generation: None,

@@ -973,6 +973,46 @@ fn machine_navigation_does_not_require_a_local_snapshot_or_surface() {
 }
 
 #[test]
+fn local_machine_label_from_config_replaces_the_default_local_label() {
+    let mut config = Config::default();
+    config.ui.local_machine_label = "i9".into();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_endpoint_catalog(&[remote_profile()]);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let frame = state.compose(100, 28).expect("labeled endpoint frame");
+    let local = state
+        .hits
+        .machines
+        .iter()
+        .find(|hit| hit.endpoint_id.is_local())
+        .expect("local machine row")
+        .rect;
+    let buffer = frame.to_ratatui_buffer().expect("frame should reconstruct");
+    let row = (local.x..local.right())
+        .map(|x| buffer[(x, local.y)].symbol())
+        .collect::<String>();
+    assert!(row.contains("i9"), "{row}");
+    assert!(!row.contains("Local"), "{row}");
+}
+
+#[test]
+fn local_machine_label_reload_keeps_the_configured_label() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    assert_eq!(state.endpoints[0].label, "Local");
+
+    state.config.local_machine_label = "i9".into();
+    state.sync_local_endpoint_label();
+    assert_eq!(state.endpoints[0].label, "i9");
+
+    state.set_endpoint_catalog(&[remote_profile()]);
+    assert_eq!(
+        state.endpoints[0].label, "i9",
+        "refreshing the endpoint catalog keeps the configured local label"
+    );
+}
+
+#[test]
 fn sidebar_renders_local_and_saved_ssh_endpoints_with_status() {
     let (mut state, _) = state_with_remote();
     let frame = state.compose(100, 28).expect("combined endpoint frame");
