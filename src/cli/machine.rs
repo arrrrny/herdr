@@ -137,7 +137,7 @@ fn status(args: &[String]) -> std::io::Result<i32> {
                 ("disabled", None)
             } else {
                 match crate::remote::check_saved_ssh(&profile.target, &profile.session) {
-                    Ok(()) => ("reachable", None),
+                    Ok(_) => ("reachable", None),
                     Err(error) => {
                         let message = error.to_string();
                         let status = if crate::remote::ssh_error_requires_authentication(&message) {

@@ -9,6 +9,8 @@ pub struct RuntimeStatus {
     pub version: Option<String>,
     pub protocol: Option<u32>,
     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
+    /// Identity of the node the server answers for, when it reports one.
+    pub node_id: Option<String>,
 }
 
 pub fn read_runtime_status_at(
@@ -48,11 +50,18 @@ pub fn read_runtime_status_at(
             version,
             protocol,
             capabilities,
-        } => Ok(Some(RuntimeStatus {
-            version: Some(version),
-            protocol: Some(protocol),
-            capabilities,
-        })),
+        } => {
+            let node_id = capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.reported_node_id())
+                .map(str::to_owned);
+            Ok(Some(RuntimeStatus {
+                version: Some(version),
+                protocol: Some(protocol),
+                capabilities,
+                node_id,
+            }))
+        }
         result => Err(io::Error::other(format!(
             "server status request returned unexpected result: {result:?}"
         ))),

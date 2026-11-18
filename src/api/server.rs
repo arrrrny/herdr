@@ -73,6 +73,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
+        node_id: crate::config::Config::load().config.node_id().to_string(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
         health_check: true,
@@ -1152,6 +1153,7 @@ mod tests {
         agent_status: crate::api::schema::AgentStatus,
     ) -> crate::api::schema::PaneInfo {
         crate::api::schema::PaneInfo {
+            node_id: "test-node".into(),
             pane_id: pane_id.into(),
             terminal_id: "term_1".into(),
             workspace_id: "ws_1".into(),
@@ -1405,6 +1407,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                node_id: "test-node".into(),
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(

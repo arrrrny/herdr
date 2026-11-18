@@ -825,6 +825,10 @@ pub struct AppState {
     pub outer_terminal_focus: Option<bool>,
     // Config
     pub prefix_keys: Vec<(KeyCode, KeyModifiers)>,
+    /// Identity of the node this server answers for. Stamped onto every entity
+    /// the API reports, so a consumer holding a pane, tab, workspace or agent
+    /// id can tell which node it came from without a second lookup.
+    pub node_id: crate::node::NodeId,
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
@@ -1041,6 +1045,7 @@ impl AppState {
     /// Create an AppState for testing — no channels, no PTYs.
     pub fn test_new() -> Self {
         Self {
+            node_id: crate::node::NodeId::fallback(),
             badges: crate::badges::BadgeStore::new(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),

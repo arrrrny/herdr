@@ -34,6 +34,7 @@ mod kitty_graphics;
 mod layout;
 mod logging;
 mod metadata_tokens;
+mod node;
 mod noninteractive_process;
 mod pane;
 use ghostty_vt::pane_graphics_files;

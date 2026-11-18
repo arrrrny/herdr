@@ -214,6 +214,9 @@ cli_params! {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentInfo {
+    /// Identity of the node this agent was read from.
+    #[serde(default)]
+    pub node_id: String,
     pub terminal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,

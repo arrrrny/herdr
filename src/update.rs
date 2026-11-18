@@ -3335,9 +3335,11 @@ mod tests {
     fn update_requires_server_restart_only_without_the_endpoint_baseline() {
         let release = fake_release("0.5.6", Some(4));
         let compatible = crate::api::RuntimeStatus {
+            node_id: Some("test-node".into()),
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: Some(crate::api::schema::ServerCapabilities {
+                node_id: "test-node".into(),
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
@@ -3410,9 +3412,11 @@ mod tests {
             },
             requires_server_restart: true,
             server: crate::api::RuntimeStatus {
+                node_id: Some("test-node".into()),
                 version: Some("0.6.2".to_string()),
                 protocol: Some(76),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
+                    node_id: "test-node".into(),
                     live_handoff: true,
                     detached_server_daemon: true,
                     endpoint_protocol_generation: Some(
@@ -3603,6 +3607,7 @@ mod tests {
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
         crate::session::clear_explicit_session_for_test();
         let server = crate::api::RuntimeStatus {
+            node_id: Some("test-node".into()),
             version: Some("0.5.5".to_string()),
             protocol: Some(2),
             capabilities: None,
@@ -3671,9 +3676,11 @@ mod tests {
             server: crate::api::RuntimeStatus {
                 version: Some("9.8.6".to_string()),
                 protocol: Some(76),
+                node_id: Some("node-test".into()),
                 capabilities: Some(crate::api::schema::ServerCapabilities {
                     live_handoff: true,
                     detached_server_daemon: true,
+                    node_id: "node-test".into(),
                     endpoint_protocol_generation: Some(
                         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
                     ),

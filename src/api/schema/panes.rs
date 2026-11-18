@@ -497,6 +497,9 @@ crate::cli::projection::cli_params! {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneInfo {
+    /// Identity of the node this pane was read from.
+    #[serde(default)]
+    pub node_id: String,
     pub pane_id: String,
     pub terminal_id: String,
     pub workspace_id: String,

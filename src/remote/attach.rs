@@ -106,7 +106,12 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     )
 }
 
-pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
+/// Check that a saved machine's Herdr server is running and compatible.
+///
+/// Returns the node identity the remote server reports, or `None` when it
+/// reports none, so a caller enumerating machines can tell which node each one
+/// is.
+pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<Option<String>> {
     super::validate_remote_target(target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     crate::session::validate_name(session)
@@ -117,6 +122,7 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
         let remote = find_installed_remote_herdr(&ssh)?;
         match remote_server_status(&ssh, &remote, false)? {
             RemoteServerStatus::Running {
+                node_id,
                 endpoint_protocol_generation,
                 surface_interest,
                 health_check,
@@ -131,7 +137,7 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
             )
             .is_none() =>
             {
-                Ok(())
+                Ok(node_id)
             }
             _ => Err(io::Error::other(format!(
                 "remote Herdr server is stopped or incompatible; run `{}`",
@@ -2213,6 +2219,8 @@ enum RemoteServerStatus {
         health_check: bool,
         live_handoff: bool,
         detached_server_daemon: bool,
+        /// Node identity the remote server reports, when it reports one.
+        node_id: Option<String>,
     },
     NotRunning,
 }
@@ -2250,6 +2258,7 @@ fn ensure_remote_server_ready(
         health_check,
         live_handoff,
         detached_server_daemon,
+        ..
     } = status
     else {
         return Ok(());
@@ -2326,6 +2335,7 @@ fn confirm_remote_install_with_running_server(
         health_check,
         live_handoff,
         detached_server_daemon,
+        ..
     } = &status
     else {
         return Ok(false);
@@ -2504,6 +2514,8 @@ impl RemoteClientStatusJson {
 struct RemoteServerStatusJson {
     running: bool,
     version: Option<String>,
+    #[serde(default)]
+    node_id: Option<String>,
     capabilities: Option<RemoteServerCapabilitiesJson>,
 }
 
@@ -2548,6 +2560,7 @@ fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatu
 
     Ok(RemoteServerStatus::Running {
         version: parsed.version,
+        node_id: parsed.node_id,
         endpoint_protocol_generation: capabilities
             .as_ref()
             .and_then(|capabilities| capabilities.endpoint_protocol_generation),
@@ -5941,11 +5954,12 @@ function Get-Process {
     fn parse_remote_server_status_json_reads_running_server() {
         assert_eq!(
             parse_remote_server_status_json(
-                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}"#
+                r#"{"status":"running","running":true,"version":"0.6.0","node_id":"node-a","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}"#
             )
             .unwrap(),
             RemoteServerStatus::Running {
                 version: Some("0.6.0".into()),
+                node_id: Some("node-a".into()),
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
                 health_check: true,
@@ -5964,6 +5978,7 @@ function Get-Process {
             .unwrap(),
             RemoteServerStatus::Running {
                 version: Some("0.6.0".into()),
+                node_id: None,
                 endpoint_protocol_generation: None,
                 surface_interest: false,
                 health_check: false,

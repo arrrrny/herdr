@@ -762,6 +762,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                node_id: "test-node".into(),
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
@@ -792,6 +793,7 @@ fn session_snapshot_request_and_response_round_trip() {
         id: "req_snapshot".into(),
         result: ResponseResult::SessionSnapshot {
             snapshot: Box::new(SessionSnapshot {
+                node_id: "test-node".into(),
                 version: "0.1.2".into(),
                 protocol: 16,
                 focused_workspace_id: None,
@@ -833,6 +835,7 @@ fn worktree_request_and_response_round_trip() {
         id: "req_worktree".into(),
         result: ResponseResult::WorktreeCreated {
             workspace: WorkspaceInfo {
+                node_id: "test-node".into(),
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "herdr".into(),
@@ -851,6 +854,7 @@ fn worktree_request_and_response_round_trip() {
                 }),
             },
             tab: TabInfo {
+                node_id: "test-node".into(),
                 tab_id: "w_1:1".into(),
                 workspace_id: "w_1".into(),
                 number: 1,
@@ -860,6 +864,7 @@ fn worktree_request_and_response_round_trip() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                node_id: "test-node".into(),
                 pane_id: "w_1-1".into(),
                 terminal_id: "term_1".into(),
                 workspace_id: "w_1".into(),
@@ -920,6 +925,7 @@ fn worktree_lifecycle_events_round_trip() {
     assert_eq!(restored, subscription);
 
     let workspace = WorkspaceInfo {
+        node_id: "test-node".into(),
         workspace_id: "w_2".into(),
         number: 2,
         label: "herdr".into(),
@@ -1280,6 +1286,7 @@ fn create_response_round_trips_with_root_pane() {
         id: "req_2".into(),
         result: ResponseResult::TabCreated {
             tab: TabInfo {
+                node_id: "test-node".into(),
                 tab_id: "w_1:2".into(),
                 workspace_id: "w_1".into(),
                 number: 2,
@@ -1289,6 +1296,7 @@ fn create_response_round_trips_with_root_pane() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                node_id: "test-node".into(),
                 pane_id: "w_1-3".into(),
                 terminal_id: "term_example".into(),
                 workspace_id: "w_1".into(),

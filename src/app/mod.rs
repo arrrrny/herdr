@@ -532,6 +532,7 @@ impl App {
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
             prefix_keys,
+            node_id: config.node_id(),
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
@@ -968,6 +969,11 @@ impl App {
         }
 
         if !invalid_section("server") {
+            if let Some(diagnostic) = config.invalid_node_id_diagnostic() {
+                diagnostics.push(format!("{diagnostic}; keeping current [server] settings"));
+            } else {
+                self.state.node_id = config.node_id();
+            }
             if let Some(diagnostic) = config.invalid_headless_size_diagnostic() {
                 diagnostics.push(format!("{diagnostic}; keeping current [server] settings"));
             } else {

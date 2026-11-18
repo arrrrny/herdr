@@ -457,6 +457,7 @@ impl App {
         }
         let pane = self.pane_metadata(ws_idx, pane_id)?;
         Some(crate::api::schema::AgentInfo {
+            node_id: self.state.node_id.to_string(),
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
             agent: pane.agent,

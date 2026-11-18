@@ -63,6 +63,9 @@ pub struct TabMoveParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TabInfo {
+    /// Identity of the node this tab was read from.
+    #[serde(default)]
+    pub node_id: String,
     pub tab_id: String,
     pub workspace_id: String,
     pub number: usize,
