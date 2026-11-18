@@ -4385,6 +4385,54 @@
               "type": "object"
             },
             {
+              "description": "Live pane output: one snapshot followed by coalesced incremental chunks.",
+              "properties": {
+                "format": {
+                  "$ref": "#/schemas/request/$defs/ReadFormat",
+                  "default": "ansi"
+                },
+                "lines": {
+                  "description": "Lines per chunk and the size of the initial snapshot.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "since_sequence": {
+                  "description": "Last stream sequence the client applied; asks for a replay.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "$ref": "#/schemas/request/$defs/ReadSource",
+                  "default": "recent"
+                },
+                "strip_ansi": {
+                  "default": false,
+                  "description": "Kept `false` so chunks carry their ANSI by default.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "pane.output_stream",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "type": {
                   "const": "layout.updated",
@@ -6591,6 +6639,60 @@
           ],
           "type": "object"
         },
+        "PaneOutputStreamEvent": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "phase": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneOutputStreamPhase"
+            },
+            "sequence": {
+              "description": "Monotonic per-pane sequence, so a reconnecting client can ask for a replay.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "description": "Whether `text` is a window the line cap clipped short of the pane's whole\nhistory. Set on `snapshot` and `resync`, where `text` is a full read; a\n`delta` is complete relative to what the client already holds, so it\nalways reports `false` and the flag is read together with `phase`.",
+              "type": "boolean"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "workspace_id",
+            "sequence",
+            "phase",
+            "text"
+          ],
+          "type": "object"
+        },
+        "PaneOutputStreamPhase": {
+          "description": "Where a stream event sits in the pane's output history.",
+          "oneOf": [
+            {
+              "const": "snapshot",
+              "description": "A full pane read: the client replaces its buffer with `text`.",
+              "type": "string"
+            },
+            {
+              "const": "delta",
+              "description": "Only the output produced since the previous stream event.",
+              "type": "string"
+            },
+            {
+              "const": "resync",
+              "description": "Retained history was lost; `text` is a fresh full read to resync to.",
+              "type": "string"
+            }
+          ]
+        },
         "PaneReadResult": {
           "properties": {
             "format": {
@@ -6702,6 +6804,9 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/PaneScrollChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/PaneOutputStreamEvent"
             }
           ]
         },
@@ -6709,7 +6814,8 @@
           "enum": [
             "pane.output_matched",
             "pane.agent_status_changed",
-            "pane.scroll_changed"
+            "pane.scroll_changed",
+            "pane.output_stream"
           ],
           "type": "string"
         }

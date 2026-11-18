@@ -667,6 +667,12 @@ fn subscribe_request_parses_parameterized_subscriptions() {
                 {
                     "type": "pane.scroll_changed",
                     "pane_id": "p_1_1"
+                },
+                {
+                    "type": "pane.output_stream",
+                    "pane_id": "p_1_1",
+                    "lines": 40,
+                    "since_sequence": 7
                 }
             ]
         }
@@ -677,7 +683,7 @@ fn subscribe_request_parses_parameterized_subscriptions() {
     let Method::EventsSubscribe(params) = request.method else {
         panic!("wrong method parsed");
     };
-    assert_eq!(params.subscriptions.len(), 3);
+    assert_eq!(params.subscriptions.len(), 4);
     assert!(matches!(
         &params.subscriptions[0],
         Subscription::PaneOutputMatched {
@@ -698,6 +704,17 @@ fn subscribe_request_parses_parameterized_subscriptions() {
     assert!(matches!(
         &params.subscriptions[2],
         Subscription::PaneScrollChanged { pane_id } if pane_id == "p_1_1"
+    ));
+    assert!(matches!(
+        &params.subscriptions[3],
+        Subscription::PaneOutputStream {
+            pane_id,
+            source: ReadSource::Recent,
+            lines: Some(40),
+            format: ReadFormat::Ansi,
+            strip_ansi: false,
+            since_sequence: Some(7),
+        } if pane_id == "p_1_1"
     ));
 }
 
