@@ -44,6 +44,7 @@ pub fn run_server() -> io::Result<()> {
     let _api_server = match api::start_server_with_stop_control(
         api_tx.clone(),
         event_hub.clone(),
+        loaded_config.config.node_id(),
         server_stop.clone(),
     ) {
         Ok(server) => server,
@@ -181,6 +182,7 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
         let api_server = api::start_server_with_stop_control(
             api_tx.clone(),
             event_hub.clone(),
+            loaded_config.config.node_id(),
             server_stop.clone(),
         )?;
         let mut server = HeadlessServer::new(

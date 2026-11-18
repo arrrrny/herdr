@@ -11,6 +11,21 @@ pub struct RuntimeStatus {
     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
 }
 
+impl RuntimeStatus {
+    /// Identity of the node the server answers for, when it reports one.
+    ///
+    /// This reads the identity the capabilities carry rather than a second
+    /// copy of it, so a `RuntimeStatus` can never answer `Some("i7")` while
+    /// the capabilities beside it still say `""`. A server built before node
+    /// identity existed sends no value and a blank one reads the same way: an
+    /// absent identity is unknown, never a stable one.
+    pub fn node_id(&self) -> Option<&str> {
+        self.capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.reported_node_id())
+    }
+}
+
 pub fn read_runtime_status_at(
     socket_path: &Path,
     timeout: Duration,

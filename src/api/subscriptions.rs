@@ -982,6 +982,7 @@ mod tests {
 
     fn pane_info_with_scroll(scroll: Option<PaneScrollInfo>) -> PaneInfo {
         PaneInfo {
+            node_id: "test-node".into(),
             pane_id: "pane_1".into(),
             terminal_id: "terminal_1".into(),
             workspace_id: "workspace_1".into(),

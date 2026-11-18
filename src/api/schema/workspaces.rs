@@ -81,6 +81,9 @@ cli_params! {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceInfo {
+    /// Identity of the node this workspace was read from.
+    #[serde(default)]
+    pub node_id: String,
     pub workspace_id: String,
     pub number: usize,
     pub label: String,

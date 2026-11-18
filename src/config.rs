@@ -125,6 +125,7 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.invalid_node_id_diagnostic())
             .chain(self.invalid_agent_start_nice_diagnostic())
             .collect()
     }
@@ -144,6 +145,31 @@ impl Config {
                 self.server.headless_cols, self.server.headless_rows
             )
         })
+    }
+
+    /// The node identity this server stamps onto every entity it reports.
+    ///
+    /// An absent or blank `server.node_id` resolves to the documented
+    /// `local` fallback, which is deliberately not a stable identity.
+    pub(crate) fn node_id(&self) -> crate::node::NodeId {
+        crate::node::resolve_node_id(&self.server.node_id)
+            .unwrap_or_else(|_| crate::node::NodeId::fallback())
+    }
+
+    /// Reports a `server.node_id` that cannot be used.
+    ///
+    /// The value is never silently accepted: it is reported and the server
+    /// answers with the fallback identity instead of a half-validated one.
+    pub(crate) fn invalid_node_id_diagnostic(&self) -> Option<String> {
+        crate::node::resolve_node_id(&self.server.node_id)
+            .err()
+            .map(|err| {
+                format!(
+                    "server.node_id {:?} is not a usable node identity ({err}); falling back to {:?}",
+                    self.server.node_id,
+                    crate::node::FALLBACK_NODE_ID
+                )
+            })
     }
 
     /// Reports an out-of-range `[agent.start] nice` value.

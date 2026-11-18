@@ -805,6 +805,11 @@
                 "null"
               ]
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this pane was read from.",
+              "type": "string"
+            },
             "pane_id": {
               "type": "string"
             },
@@ -1046,6 +1051,11 @@
             "label": {
               "type": "string"
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this tab was read from.",
+              "type": "string"
+            },
             "number": {
               "format": "uint",
               "minimum": 0,
@@ -1086,6 +1096,11 @@
               "type": "boolean"
             },
             "label": {
+              "type": "string"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this workspace was read from.",
               "type": "string"
             },
             "number": {
@@ -6886,6 +6901,11 @@
                 "null"
               ]
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this agent was read from.",
+              "type": "string"
+            },
             "pane_id": {
               "type": "string"
             },
@@ -8215,6 +8235,11 @@
                 "string",
                 "null"
               ]
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this pane was read from.",
+              "type": "string"
             },
             "pane_id": {
               "type": "string"
@@ -10837,6 +10862,11 @@
             "live_handoff": {
               "type": "boolean"
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this server answers for. Every entity it reports\ncarries the same value, so a consumer holding references from several\nservers can tell which node each one belongs to.",
+              "type": "string"
+            },
             "ssh_agent_registration": {
               "default": false,
               "description": "Supports connection-scoped `server.ssh_agent.register` on the local JSON API.",
@@ -10884,6 +10914,11 @@
                 "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
               },
               "type": "array"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this snapshot was read from. Blank only for a\nserver built before node identity existed.",
+              "type": "string"
             },
             "panes": {
               "items": {
@@ -10941,6 +10976,11 @@
             "label": {
               "type": "string"
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this tab was read from.",
+              "type": "string"
+            },
             "number": {
               "format": "uint",
               "minimum": 0,
@@ -10981,6 +11021,11 @@
               "type": "boolean"
             },
             "label": {
+              "type": "string"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this workspace was read from.",
               "type": "string"
             },
             "number": {

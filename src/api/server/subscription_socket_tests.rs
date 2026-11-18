@@ -265,6 +265,7 @@ fn reply_to_probe(request: ApiRequestMessage) {
 
 fn probe_pane_info() -> PaneInfo {
     PaneInfo {
+        node_id: "test-node".into(),
         pane_id: "pane_1".into(),
         terminal_id: "term_1".into(),
         workspace_id: "workspace_1".into(),

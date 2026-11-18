@@ -1071,6 +1071,11 @@ pub struct ServerConfig {
     /// a bind failure is non-fatal and only logs a warning, because agents fall
     /// back to screen-marker and OSC-title detection.
     pub agent_push_listen_addr: String,
+    /// Stable identity of this node, stamped onto every entity the server
+    /// reports. Configured, never derived from the hostname, so it survives a
+    /// hostname or address change. Blank resolves to the documented
+    /// `local` fallback, which is not a stable identity.
+    pub node_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1363,6 +1368,7 @@ impl Default for ServerConfig {
             headless_rows: crate::config::DEFAULT_HEADLESS_ROWS,
             agent_push_listen_addr: crate::api::http_push::DEFAULT_HTTP_PUSH_LISTEN_ADDR
                 .to_string(),
+            node_id: String::new(),
         }
     }
 }
@@ -1780,6 +1786,52 @@ local_machine_label = "a\nb"
         )
         .unwrap();
         assert_eq!(control.ui.local_machine_label_trimmed(), "ab");
+    }
+
+    #[test]
+    fn node_id_defaults_to_the_documented_fallback_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(
+            default_config.node_id().as_str(),
+            crate::node::FALLBACK_NODE_ID
+        );
+        assert!(!default_config.node_id().is_configured());
+        assert!(default_config.invalid_node_id_diagnostic().is_none());
+
+        let toml = r#"
+[server]
+node_id = "i7"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.node_id().as_str(), "i7");
+        assert!(config.node_id().is_configured());
+        assert!(config.invalid_node_id_diagnostic().is_none());
+
+        let blank: Config = toml::from_str(
+            r#"
+[server]
+node_id = "   "
+"#,
+        )
+        .unwrap();
+        assert_eq!(blank.node_id().as_str(), crate::node::FALLBACK_NODE_ID);
+        assert!(blank.invalid_node_id_diagnostic().is_none());
+    }
+
+    #[test]
+    fn unusable_node_id_is_reported_and_falls_back_instead_of_being_accepted() {
+        let toml = r#"
+[server]
+node_id = "two words"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let diagnostic = config
+            .invalid_node_id_diagnostic()
+            .expect("an unusable node id is reported");
+        assert!(diagnostic.contains("server.node_id"), "{diagnostic}");
+        assert!(diagnostic.contains("local"), "{diagnostic}");
+        assert!(config.collect_diagnostics().contains(&diagnostic));
+        assert_eq!(config.node_id().as_str(), crate::node::FALLBACK_NODE_ID);
     }
 
     #[test]

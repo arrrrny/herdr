@@ -43,6 +43,11 @@ pub struct ServerCapabilities {
     pub live_handoff: bool,
     #[serde(default)]
     pub detached_server_daemon: bool,
+    /// Identity of the node this server answers for. Every entity it reports
+    /// carries the same value, so a consumer holding references from several
+    /// servers can tell which node each one belongs to.
+    #[serde(default)]
+    pub node_id: String,
     /// Stable client-owned endpoint generation supported by this server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_protocol_generation: Option<u32>,
@@ -55,4 +60,16 @@ pub struct ServerCapabilities {
     /// Supports connection-scoped `server.ssh_agent.register` on the local JSON API.
     #[serde(default)]
     pub ssh_agent_registration: bool,
+}
+
+impl ServerCapabilities {
+    /// The node identity this server answers for, when it reports one.
+    ///
+    /// A server built before node identity existed sends no value, and a blank
+    /// one is treated the same way: an absent identity is unknown, never a
+    /// stable one.
+    pub fn reported_node_id(&self) -> Option<&str> {
+        let node_id = self.node_id.trim();
+        (!node_id.is_empty()).then_some(node_id)
+    }
 }

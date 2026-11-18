@@ -64,15 +64,30 @@ impl ServerHandle {
 pub(crate) fn start_server_with_stop_control(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
+    node_id: crate::node::NodeId,
     server_stop: ServerStop,
 ) -> std::io::Result<ServerHandle> {
-    start_server_inner(api_tx, event_hub, default_capabilities(), Some(server_stop))
+    start_server_inner(
+        api_tx,
+        event_hub,
+        default_capabilities(node_id),
+        Some(server_stop),
+    )
 }
 
-fn default_capabilities() -> Option<ServerCapabilities> {
+/// Capabilities every server reports, stamped with the caller's node identity.
+///
+/// The identity is a parameter rather than a `Config::load()` of its own: the
+/// entities an API client reads take theirs from the app state, which a live
+/// `herdr server reload-config` reassigns, so a server that loaded the config a
+/// second time here would keep answering the old identity on `ping` while every
+/// entity answered the new one. The caller that already holds the config hands
+/// the resolved value in, so one server has one identity.
+fn default_capabilities(node_id: crate::node::NodeId) -> Option<ServerCapabilities> {
     Some(ServerCapabilities {
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
+        node_id: node_id.to_string(),
         endpoint_protocol_generation: Some(crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION),
         surface_interest: true,
         health_check: true,
@@ -1147,11 +1162,39 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn capabilities_are_stamped_with_the_callers_node_identity() {
+        // The seam that decides what a fleet sees: `default_capabilities` is
+        // handed the resolved identity rather than loading the config itself,
+        // so the value `ping` reports is the one the entities were built with.
+        let configured = default_capabilities(crate::node::NodeId::parse("i7").unwrap()).unwrap();
+        assert_eq!(configured.reported_node_id(), Some("i7"));
+
+        // An unconfigured server answers with the documented fallback rather
+        // than a hostname, and never with an empty identity.
+        let unconfigured = default_capabilities(crate::node::NodeId::fallback()).unwrap();
+        assert_eq!(
+            unconfigured.reported_node_id(),
+            Some(crate::node::FALLBACK_NODE_ID)
+        );
+        assert!(!unconfigured.reported_node_id().unwrap().is_empty());
+    }
+
+    #[test]
+    fn blank_capabilities_node_id_reads_as_unknown() {
+        let capabilities = ServerCapabilities {
+            node_id: "   ".to_string(),
+            ..default_capabilities(crate::node::NodeId::fallback()).unwrap()
+        };
+        assert_eq!(capabilities.reported_node_id(), None);
+    }
+
     fn pane_info(
         pane_id: &str,
         agent_status: crate::api::schema::AgentStatus,
     ) -> crate::api::schema::PaneInfo {
         crate::api::schema::PaneInfo {
+            node_id: "test-node".into(),
             pane_id: pane_id.into(),
             terminal_id: "term_1".into(),
             workspace_id: "ws_1".into(),
@@ -1405,6 +1448,7 @@ mod tests {
             },
             &tx,
             Some(ServerCapabilities {
+                node_id: "test-node".into(),
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(
