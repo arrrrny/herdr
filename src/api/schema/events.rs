@@ -437,6 +437,10 @@ pub struct PaneOutputStreamEvent {
     pub sequence: u64,
     pub phase: PaneOutputStreamPhase,
     pub text: String,
+    /// Whether `text` is a window the line cap clipped short of the pane's whole
+    /// history. Set on `snapshot` and `resync`, where `text` is a full read; a
+    /// `delta` is complete relative to what the client already holds, so it
+    /// always reports `false` and the flag is read together with `phase`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
 }

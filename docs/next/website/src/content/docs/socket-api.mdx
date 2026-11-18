@@ -861,7 +861,10 @@ the client's text, for example after a clear or a full repaint, the event is a
 clients pass `since_sequence` with the last sequence they applied: Herdr replays
 the retained chunks after it, or answers `resync` when that history was dropped.
 Retained stream output is bounded per pane and in total, and a pane that floods
-cannot evict lifecycle events. Stream events and `layout.updated` arrive on the
+cannot evict lifecycle events. Each event's `truncated` flag describes its own
+`text` window: `snapshot` and `resync` set it when the line cap clipped the full
+read, while a `delta` is complete relative to what the client already holds and
+always reports `false`. Stream events and `layout.updated` arrive on the
 same subscription connection, so a client rendering a pane can track its grid
 from `layout.updated` while it renders `pane.output_stream` chunks.
 Layout event subscriptions include `layout.updated`. The event carries the

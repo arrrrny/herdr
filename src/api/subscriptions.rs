@@ -17,6 +17,10 @@ pub(super) const DEFAULT_OUTPUT_STREAM_LINES: u32 = 64;
 pub(super) const MAX_OUTPUT_STREAM_LINES: u32 = 1000;
 /// How many candidate split points the delta stitch tries before it gives up
 /// and asks the client to resync. A normal append matches on the first try.
+///
+/// The budget is spent one byte at a time, not one UTF-8 boundary at a time, so
+/// a full repaint of multi-byte text can consume it without ever testing a
+/// meaningful split point. That only costs a resync, never correctness.
 const MAX_OUTPUT_OVERLAP_ATTEMPTS: usize = 64;
 
 pub(super) fn output_match_read_source(
@@ -342,6 +346,10 @@ impl ActiveSubscription {
                 let initial_event = match since_sequence {
                     Some(since) => match event_hub.output_stream_replay(&pane_id, since) {
                         OutputStreamReplay::Events(events) => {
+                            // Replayed chunks keep the sequences they were
+                            // published under and are already retained, so they
+                            // go straight onto the queue instead of back through
+                            // `output_stream_push`.
                             for retained in events {
                                 sent = retained.event.text.clone();
                                 replayed.push_back(SubscriptionEventEnvelope {
@@ -715,6 +723,12 @@ impl ActiveOutputStreamSubscription {
             return None;
         }
 
+        // `read.truncated` describes the read window, not the chunk. Only a
+        // whole-window phase (`snapshot`/`resync`) hands the client text that the
+        // line cap could have clipped; a delta is complete relative to what the
+        // client already holds, so it never reports a truncation it did not have.
+        let truncated = !matches!(phase, PaneOutputStreamPhase::Delta) && read.truncated;
+
         Some(self.publish(
             PaneOutputStreamEvent {
                 pane_id: self.pane_id.clone(),
@@ -722,7 +736,7 @@ impl ActiveOutputStreamSubscription {
                 sequence: 0,
                 phase,
                 text: text.to_string(),
-                truncated: read.truncated,
+                truncated,
             },
             event_hub,
         ))

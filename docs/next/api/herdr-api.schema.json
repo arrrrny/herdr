@@ -6642,6 +6642,7 @@
               "type": "string"
             },
             "truncated": {
+              "description": "Whether `text` is a window the line cap clipped short of the pane's whole\nhistory. Set on `snapshot` and `resync`, where `text` is a full read; a\n`delta` is complete relative to what the client already holds, so it\nalways reports `false` and the flag is read together with `phase`.",
               "type": "boolean"
             },
             "workspace_id": {

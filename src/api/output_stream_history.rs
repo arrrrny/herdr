@@ -21,6 +21,9 @@ pub(crate) enum OutputStreamReplay {
 #[derive(Debug, Default)]
 struct PaneOutputStreamState {
     next_sequence: u64,
+    /// Tick of this pane's most recent publish, so eviction drops the least
+    /// recently published pane instead of the first key in `BTreeMap` order.
+    last_publish: u64,
     events: VecDeque<RetainedOutputStreamEvent>,
     bytes: usize,
 }
@@ -33,6 +36,13 @@ struct PaneOutputStreamState {
 #[derive(Debug)]
 pub(crate) struct OutputStreamHistory {
     panes: BTreeMap<String, PaneOutputStreamState>,
+    /// How far each evicted pane's sequence had reached. A pane that publishes
+    /// again resumes there instead of restarting at 1, so a reconnecting client
+    /// never sees a backwards sequence. Bounded to the live pane cap: a
+    /// tombstone is sequence bookkeeping, not retained output.
+    retired: BTreeMap<String, u64>,
+    /// Publish counter behind each pane's `last_publish` tick.
+    tick: u64,
     bytes: usize,
 }
 
@@ -49,6 +59,8 @@ impl OutputStreamHistory {
     pub(crate) fn new() -> Self {
         Self {
             panes: BTreeMap::new(),
+            retired: BTreeMap::new(),
+            tick: 0,
             bytes: 0,
         }
     }
@@ -59,10 +71,12 @@ impl OutputStreamHistory {
         pane_id: &str,
         mut event: PaneOutputStreamEvent,
     ) -> PaneOutputStreamEvent {
-        let state = self
-            .panes
-            .entry(pane_id.to_string())
-            .or_default();
+        self.tick = self.tick.saturating_add(1);
+        let state = self.panes.entry(pane_id.to_string()).or_default();
+        if let Some(sequence) = self.retired.remove(pane_id) {
+            state.next_sequence = sequence;
+        }
+        state.last_publish = self.tick;
         state.next_sequence = state.next_sequence.saturating_add(1);
         let sequence = state.next_sequence;
         event.sequence = sequence;
@@ -109,17 +123,21 @@ impl OutputStreamHistory {
     }
 
     fn trim(&mut self, pane_id: &str) {
-        if self.panes.len() > Self::MAX_PANES {
-            // BTreeMap order is stable, so the same pane always goes first.
+        while self.panes.len() > Self::MAX_PANES {
+            // Least recently published goes first; `pane_id` just published, so
+            // it is never the victim.
             let victim = self
                 .panes
-                .keys()
-                .find(|candidate| candidate.as_str() != pane_id)
-                .cloned();
-            if let Some(victim) = victim {
-                if let Some(state) = self.panes.remove(&victim) {
-                    self.bytes = self.bytes.saturating_sub(state.bytes);
-                }
+                .iter()
+                .filter(|(candidate, _)| candidate.as_str() != pane_id)
+                .min_by_key(|(_, state)| state.last_publish)
+                .map(|(candidate, _)| candidate.clone());
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(state) = self.panes.remove(&victim) {
+                self.bytes = self.bytes.saturating_sub(state.bytes);
+                self.retire(&victim, state.next_sequence);
             }
         }
 
@@ -135,6 +153,19 @@ impl OutputStreamHistory {
             };
             state.bytes = state.bytes.saturating_sub(dropped.event.text.len());
             self.bytes = self.bytes.saturating_sub(dropped.event.text.len());
+        }
+    }
+
+    /// Remembers how far an evicted pane's sequence had reached, so the pane
+    /// keeps its sequence space when it publishes again. Bounded to the live
+    /// pane cap; `BTreeMap` order is stable, so the same key always goes first.
+    fn retire(&mut self, pane_id: &str, sequence: u64) {
+        self.retired.insert(pane_id.to_string(), sequence);
+        while self.retired.len() > Self::MAX_PANES {
+            let Some(victim) = self.retired.keys().next().cloned() else {
+                break;
+            };
+            self.retired.remove(&victim);
         }
     }
 }
@@ -226,6 +257,47 @@ mod tests {
         );
         assert!(matches!(
             history.replay("pane_1", 40),
+            OutputStreamReplay::Events(_)
+        ));
+    }
+
+    #[test]
+    fn eviction_drops_the_least_recently_published_pane() {
+        let mut history = OutputStreamHistory::new();
+        for index in 0..OutputStreamHistory::MAX_PANES {
+            history.push(&format!("pane_{index}"), event("a"));
+        }
+        // Publishing pane_0 again makes it the most recent pane, not the first key.
+        history.push("pane_0", event("b"));
+        history.push("overflow", event("a"));
+
+        assert!(
+            matches!(history.replay("pane_0", 1), OutputStreamReplay::Events(_)),
+            "a pane that just published must survive eviction"
+        );
+        assert_eq!(
+            history.replay("pane_1", 0),
+            OutputStreamReplay::Lost,
+            "the least recently published pane is the eviction victim"
+        );
+    }
+
+    #[test]
+    fn an_evicted_pane_resumes_its_sequence_space() {
+        let mut history = OutputStreamHistory::new();
+        history.push("pane_0", event("a"));
+        history.push("pane_0", event("b"));
+        // Overflow the pane cap so the stale pane_0 is evicted.
+        for index in 1..=OutputStreamHistory::MAX_PANES {
+            history.push(&format!("pane_{index}"), event("x"));
+        }
+        assert_eq!(history.replay("pane_0", 0), OutputStreamReplay::Lost);
+
+        // The pane comes back: it continues at 3 instead of restarting at 1, so a
+        // client resuming at sequence 2 sees forward progress, never a rewind.
+        assert_eq!(history.push("pane_0", event("c")).sequence, 3);
+        assert!(matches!(
+            history.replay("pane_0", 2),
             OutputStreamReplay::Events(_)
         ));
     }
