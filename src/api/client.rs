@@ -114,10 +114,6 @@ impl ApiClient {
             } => Ok(crate::api::RuntimeStatus {
                 version: Some(version),
                 protocol: Some(protocol),
-                node_id: capabilities
-                    .as_ref()
-                    .and_then(|capabilities| capabilities.reported_node_id())
-                    .map(str::to_owned),
                 capabilities,
             }),
             result => Err(ApiClientError::UnexpectedResult(format!("{result:?}"))),

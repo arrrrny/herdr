@@ -3331,38 +3331,59 @@ mod tests {
         );
     }
 
+    fn fake_server_capabilities() -> crate::api::schema::ServerCapabilities {
+        crate::api::schema::ServerCapabilities {
+            node_id: "test-node".into(),
+            live_handoff: true,
+            detached_server_daemon: true,
+            endpoint_protocol_generation: Some(
+                crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+            ),
+            surface_interest: true,
+            health_check: true,
+            ssh_agent_registration: false,
+        }
+    }
+
+    fn fake_runtime_status(
+        capabilities: Option<crate::api::schema::ServerCapabilities>,
+    ) -> crate::api::RuntimeStatus {
+        crate::api::RuntimeStatus {
+            version: Some("0.5.5".to_string()),
+            protocol: Some(2),
+            capabilities,
+        }
+    }
+
+    #[test]
+    fn runtime_status_reports_the_node_id_its_capabilities_carry() {
+        let reported = fake_runtime_status(Some(fake_server_capabilities()));
+        assert_eq!(reported.node_id(), Some("test-node"));
+
+        let unknown = fake_runtime_status(None);
+        assert_eq!(unknown.node_id(), None);
+
+        // A server that predates node identity sends none, and a blank one is
+        // the same unknown value rather than a stable-looking identity.
+        let blank = fake_runtime_status(Some(crate::api::schema::ServerCapabilities {
+            node_id: String::new(),
+            ..fake_server_capabilities()
+        }));
+        assert_eq!(blank.node_id(), None);
+    }
+
     #[test]
     fn update_requires_server_restart_only_without_the_endpoint_baseline() {
         let release = fake_release("0.5.6", Some(4));
-        let compatible = crate::api::RuntimeStatus {
-            node_id: Some("test-node".into()),
-            version: Some("0.5.5".to_string()),
-            protocol: Some(2),
-            capabilities: Some(crate::api::schema::ServerCapabilities {
-                node_id: "test-node".into(),
-                live_handoff: true,
-                detached_server_daemon: true,
-                endpoint_protocol_generation: Some(
-                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-                ),
-                surface_interest: true,
-                health_check: true,
-                ssh_agent_registration: false,
-            }),
-        };
-        let missing_baseline = crate::api::RuntimeStatus {
-            capabilities: None,
-            ..compatible.clone()
-        };
-        let incompatible_generation = crate::api::RuntimeStatus {
-            capabilities: Some(crate::api::schema::ServerCapabilities {
+        let compatible = fake_runtime_status(Some(fake_server_capabilities()));
+        let missing_baseline = fake_runtime_status(None);
+        let incompatible_generation =
+            fake_runtime_status(Some(crate::api::schema::ServerCapabilities {
                 endpoint_protocol_generation: Some(
                     crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION + 1,
                 ),
-                ..compatible.capabilities.clone().unwrap()
-            }),
-            ..compatible.clone()
-        };
+                ..fake_server_capabilities()
+            }));
 
         assert!(!update_requires_server_restart(&compatible, &release));
         assert!(update_requires_server_restart(&missing_baseline, &release));
@@ -3411,22 +3432,17 @@ mod tests {
                 must_be_running: true,
             },
             requires_server_restart: true,
-            server: crate::api::RuntimeStatus {
-                node_id: Some("test-node".into()),
-                version: Some("0.6.2".to_string()),
-                protocol: Some(76),
-                capabilities: Some(crate::api::schema::ServerCapabilities {
-                    node_id: "test-node".into(),
-                    live_handoff: true,
-                    detached_server_daemon: true,
-                    endpoint_protocol_generation: Some(
-                        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-                    ),
-                    surface_interest: true,
-                    health_check: true,
-                    ssh_agent_registration: false,
-                }),
-            },
+            server: fake_runtime_status(Some(crate::api::schema::ServerCapabilities {
+                node_id: "test-node".into(),
+                live_handoff: true,
+                detached_server_daemon: true,
+                endpoint_protocol_generation: Some(
+                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                ),
+                surface_interest: true,
+                health_check: true,
+                ssh_agent_registration: false,
+            })),
         };
 
         let decisions = confirm_running_server_update_action(
@@ -3606,12 +3622,7 @@ mod tests {
         );
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
         crate::session::clear_explicit_session_for_test();
-        let server = crate::api::RuntimeStatus {
-            node_id: Some("test-node".into()),
-            version: Some("0.5.5".to_string()),
-            protocol: Some(2),
-            capabilities: None,
-        };
+        let server = fake_runtime_status(None);
         let release = ReleaseInfo {
             version: Version::parse("0.5.6").unwrap(),
             identity: "0.5.6".to_string(),
@@ -3673,22 +3684,17 @@ mod tests {
                 must_be_running: true,
             },
             requires_server_restart: false,
-            server: crate::api::RuntimeStatus {
-                version: Some("9.8.6".to_string()),
-                protocol: Some(76),
-                node_id: Some("node-test".into()),
-                capabilities: Some(crate::api::schema::ServerCapabilities {
-                    live_handoff: true,
-                    detached_server_daemon: true,
-                    node_id: "node-test".into(),
-                    endpoint_protocol_generation: Some(
-                        crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
-                    ),
-                    surface_interest: true,
-                    health_check: true,
-                    ssh_agent_registration: false,
-                }),
-            },
+            server: fake_runtime_status(Some(crate::api::schema::ServerCapabilities {
+                live_handoff: true,
+                detached_server_daemon: true,
+                node_id: "node-test".into(),
+                endpoint_protocol_generation: Some(
+                    crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
+                ),
+                surface_interest: true,
+                health_check: true,
+                ssh_agent_registration: false,
+            })),
         };
         let decisions = confirm_running_server_update_action(
             vec![plan],

@@ -179,10 +179,10 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
     match super::target::server_status(&super::target::api_client()?) {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
-            version: status.version,
+            version: status.version.clone(),
             protocol: status.protocol,
-            capabilities: status.capabilities,
-            node_id: status.node_id,
+            capabilities: status.capabilities.clone(),
+            node_id: status.node_id().map(str::to_owned),
         }),
         Err(err) if super::target::is_remote() => Err(super::target::remote_error(
             super::api_client_error_to_io(err),

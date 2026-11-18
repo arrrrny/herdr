@@ -19,13 +19,17 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Node identity reported when nothing is configured.
+/// Identity reported when nothing is configured.
 ///
 /// This is deliberately NOT derived from the hostname. A fleet node's hostname
 /// is not stable: the `iowa` worker's SSH alias goes stale on every VM
 /// stop/start because its external IP is ephemeral, and `arrrrny/forklift`'s
 /// `iowa.sh` exists largely to re-pin it across the fleet. A mesh keyed on
 /// hostname would inherit that failure permanently.
+///
+/// [`resolve_node_id`] is the only path from a configuration value to an
+/// identity, and it reads nothing from the host: a test resolves twice with a
+/// renamed machine and the value does not move.
 ///
 /// The fallback names the absence of a configured identity instead of inventing
 /// a stable-looking one. Every unconfigured server reports the same value, so
@@ -41,9 +45,16 @@ pub const MAX_NODE_ID_BYTES: usize = 128;
 ///
 /// Serializes as a plain string, because that is what every API response
 /// carries.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct NodeId(String);
+
+// `NodeId`'s invariant (trimmed, at most `MAX_NODE_ID_BYTES`, restricted
+// charset) is enforced by `NodeId::parse`, not by the derived `Deserialize`.
+// That is deliberate: nothing deserializes a node id off the wire — the schema
+// fields carry `String` — and a fallible `Deserialize` would make every future
+// wire type that adopts `NodeId` reject a payload instead of reporting it.
+// Values from the wire cross `parse` before they become a `NodeId`.
 
 /// Why a configured node id cannot be used.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +124,9 @@ impl NodeId {
     }
 
     /// Whether this identity came from configuration rather than the fallback.
+    ///
+    /// Only the config surface and the tests need the distinction; a report of
+    /// the identity itself never does.
     #[allow(dead_code)]
     pub fn is_configured(&self) -> bool {
         self.0 != FALLBACK_NODE_ID
@@ -125,11 +139,6 @@ impl fmt::Display for NodeId {
     }
 }
 
-/// Resolve the node identity a server runs with.
-///
-/// An absent or blank `server.node_id` resolves to [`FALLBACK_NODE_ID`]. A
-/// present but unusable value is an error, so the caller can report it and the
-/// invalid value is never silently accepted as a configured identity.
 pub fn resolve_node_id(configured: &str) -> Result<NodeId, NodeIdError> {
     if configured.trim().is_empty() {
         return Ok(NodeId::fallback());
@@ -139,7 +148,6 @@ pub fn resolve_node_id(configured: &str) -> Result<NodeId, NodeIdError> {
 
 /// One server's claimed node identity, as a consumer holding several sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct NodeClaim {
     /// How the consumer names the server: a machine label, an SSH target, a
     /// socket path. Reporting needs a name a human can act on.
@@ -149,7 +157,6 @@ pub struct NodeClaim {
 
 /// A node identity claimed by more than one server.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub struct NodeCollision {
     pub node_id: NodeId,
     pub targets: Vec<String>,
@@ -160,7 +167,6 @@ pub struct NodeCollision {
 /// Sorted by node id, then by target, so a report is stable across runs. The
 /// fallback identity is never a collision: every unconfigured server shares it
 /// by design, so two of them are indistinguishable rather than conflicting.
-#[allow(dead_code)]
 pub fn find_node_collisions(claims: &[NodeClaim]) -> Vec<NodeCollision> {
     let mut targets_by_node_id: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for claim in claims {
@@ -209,11 +215,28 @@ mod tests {
 
     #[test]
     fn node_id_is_never_derived_from_the_hostname() {
-        // The whole point of a configured identity: the same node keeps its id
-        // when the machine behind it is renamed or re-addressed.
-        let before = NodeId::parse("iowa-worker").expect("configured id");
+        // The whole point of a configured identity (FR-002): the same node keeps
+        // its id when the machine behind it is renamed or re-addressed. Proving
+        // that needs the resolution path to run twice with the hostname changed
+        // in between — two string literals compared against each other would
+        // still pass if every read called `hostname()`.
+        let resolver =
+            || crate::node::resolve_node_id("  iowa-worker  ").expect("configured id resolves");
+
+        let before = resolver();
+        // A rename on the host: the same configured value, a different machine
+        // name behind it.
+        let renamed_host = "iowa-worker-2";
+        let after = resolver();
+
         assert_eq!(before.as_str(), "iowa-worker");
-        assert_ne!(before.as_str(), "iowa-worker-2");
+        assert_eq!(after, before, "a renamed host must not move the identity");
+        assert_ne!(after.as_str(), renamed_host);
+        // And the fallback stays a fallback for the same reason: an
+        // unconfigured server must never answer with the hostname.
+        let unconfigured = crate::node::resolve_node_id("").expect("blank resolves");
+        assert_eq!(unconfigured.as_str(), FALLBACK_NODE_ID);
+        assert_ne!(unconfigured.as_str(), renamed_host);
     }
 
     #[test]

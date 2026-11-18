@@ -35,6 +35,12 @@
           "description": "Virtual terminal height used for layout and newly created panes when no client is attached. Must be greater than zero."
         },
         {
+          "key": "server.node_id",
+          "type": "string",
+          "default": "\"\"",
+          "description": "Stable identity this server stamps onto every entity it reports (`node_id` on workspaces, tabs, panes, agents, the session snapshot and the `ping` reply), so a consumer holding references from several servers can tell which node each one came from. It is validated on load: a value that is blank after trimming, longer than 128 bytes, or containing a control character or a character outside `[A-Za-z0-9._:-]` is reported as a configuration diagnostic and the server answers with the `local` fallback instead. Set to `\"\"` to accept the documented `local` fallback, which names the absence of a configured identity rather than a stable one; the identity is never derived from the hostname. Changes apply on the next server restart, not on a live config reload."
+        },
+        {
           "key": "server.agent_push_listen_addr",
           "type": "string",
           "default": "\"127.0.0.1:7878\"",

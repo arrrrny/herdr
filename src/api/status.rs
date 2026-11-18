@@ -9,8 +9,21 @@ pub struct RuntimeStatus {
     pub version: Option<String>,
     pub protocol: Option<u32>,
     pub capabilities: Option<crate::api::schema::ServerCapabilities>,
+}
+
+impl RuntimeStatus {
     /// Identity of the node the server answers for, when it reports one.
-    pub node_id: Option<String>,
+    ///
+    /// This reads the identity the capabilities carry rather than a second
+    /// copy of it, so a `RuntimeStatus` can never answer `Some("i7")` while
+    /// the capabilities beside it still say `""`. A server built before node
+    /// identity existed sends no value and a blank one reads the same way: an
+    /// absent identity is unknown, never a stable one.
+    pub fn node_id(&self) -> Option<&str> {
+        self.capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.reported_node_id())
+    }
 }
 
 pub fn read_runtime_status_at(
@@ -50,18 +63,11 @@ pub fn read_runtime_status_at(
             version,
             protocol,
             capabilities,
-        } => {
-            let node_id = capabilities
-                .as_ref()
-                .and_then(|capabilities| capabilities.reported_node_id())
-                .map(str::to_owned);
-            Ok(Some(RuntimeStatus {
-                version: Some(version),
-                protocol: Some(protocol),
-                capabilities,
-                node_id,
-            }))
-        }
+        } => Ok(Some(RuntimeStatus {
+            version: Some(version),
+            protocol: Some(protocol),
+            capabilities,
+        })),
         result => Err(io::Error::other(format!(
             "server status request returned unexpected result: {result:?}"
         ))),
