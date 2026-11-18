@@ -846,6 +846,24 @@ Terminal-title changes can emit `pane.updated`, but spinner-only raw-title chang
 `pane.scroll_changed` is scoped to one `pane_id` and emits `pane_id`,
 `workspace_id`, and the current `scroll` metrics whenever Herdr observes a
 changed scroll snapshot.
+`pane.output_stream` streams one pane's output for embedded terminal clients. The
+subscription takes `pane_id` plus optional `source` (default `recent`, served
+`recent-unwrapped` so the client's own emulator owns wrapping), `lines` (default
+64, maximum 1000) as both the coalescing bound per chunk and the snapshot size,
+`format` (default `ansi`), `strip_ansi` (default `false`, so chunks keep their
+ANSI), and `since_sequence`. The first event is a `snapshot` carrying a full pane
+read; later events are `delta` chunks holding only the output produced since the
+previous event. Chunks are coalesced at the socket poll cadence, so a flooding
+pane produces bounded events instead of one per write. Each event carries a
+`sequence` that is monotonic per pane. When the read window no longer contains
+the client's text, for example after a clear or a full repaint, the event is a
+`resync` and its `text` is a fresh full read to resynchronize to. Reconnecting
+clients pass `since_sequence` with the last sequence they applied: Herdr replays
+the retained chunks after it, or answers `resync` when that history was dropped.
+Retained stream output is bounded per pane and in total, and a pane that floods
+cannot evict lifecycle events. Stream events and `layout.updated` arrive on the
+same subscription connection, so a client rendering a pane can track its grid
+from `layout.updated` while it renders `pane.output_stream` chunks.
 Layout event subscriptions include `layout.updated`. The event carries the
 updated `PaneLayoutSnapshot` for one tab. Clients maintaining a cache with
 `session.snapshot` should use this event to refresh the affected layout through

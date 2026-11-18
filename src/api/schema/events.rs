@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::common::{AgentStatus, ReadSource};
+use super::common::{AgentStatus, ReadFormat, ReadSource};
 use super::panes::{PaneInfo, PaneReadResult, PaneScrollInfo};
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
@@ -80,8 +80,34 @@ pub enum Subscription {
     },
     #[serde(rename = "pane.scroll_changed")]
     PaneScrollChanged { pane_id: String },
+    /// Live pane output: one snapshot followed by coalesced incremental chunks.
+    #[serde(rename = "pane.output_stream")]
+    PaneOutputStream {
+        pane_id: String,
+        #[serde(default = "default_stream_source")]
+        source: ReadSource,
+        /// Lines per chunk and the size of the initial snapshot.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lines: Option<u32>,
+        #[serde(default = "default_stream_format")]
+        format: ReadFormat,
+        /// Kept `false` so chunks carry their ANSI by default.
+        #[serde(default)]
+        strip_ansi: bool,
+        /// Last stream sequence the client applied; asks for a replay.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_sequence: Option<u64>,
+    },
     #[serde(rename = "layout.updated")]
     LayoutUpdated {},
+}
+
+fn default_stream_source() -> ReadSource {
+    ReadSource::Recent
+}
+
+fn default_stream_format() -> ReadFormat {
+    ReadFormat::Ansi
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -372,6 +398,8 @@ pub enum SubscriptionEventKind {
     PaneAgentStatusChanged,
     #[serde(rename = "pane.scroll_changed")]
     ScrollChanged,
+    #[serde(rename = "pane.output_stream")]
+    PaneOutputStream,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -386,6 +414,31 @@ pub enum SubscriptionEventData {
     PaneOutputMatched(PaneOutputMatchedEvent),
     PaneAgentStatusChanged(PaneAgentStatusChangedEvent),
     ScrollChanged(PaneScrollChangedEvent),
+    PaneOutputStream(PaneOutputStreamEvent),
+}
+
+/// Where a stream event sits in the pane's output history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneOutputStreamPhase {
+    /// A full pane read: the client replaces its buffer with `text`.
+    Snapshot,
+    /// Only the output produced since the previous stream event.
+    Delta,
+    /// Retained history was lost; `text` is a fresh full read to resync to.
+    Resync,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneOutputStreamEvent {
+    pub pane_id: String,
+    pub workspace_id: String,
+    /// Monotonic per-pane sequence, so a reconnecting client can ask for a replay.
+    pub sequence: u64,
+    pub phase: PaneOutputStreamPhase,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

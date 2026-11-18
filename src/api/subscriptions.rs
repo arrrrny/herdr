@@ -1,13 +1,23 @@
 use regex::Regex;
 
 use crate::api::event_hub::EventHistoryError;
+use crate::api::output_stream_history::OutputStreamReplay;
 use crate::api::schema::{
     ErrorBody, ErrorResponse, EventKind, Method, PaneAgentStatusChangedEvent,
-    PaneOutputMatchedEvent, PaneScrollChangedEvent, PaneScrollInfo, Request, Subscription,
-    SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind,
+    PaneOutputMatchedEvent, PaneOutputStreamEvent, PaneOutputStreamPhase, PaneScrollChangedEvent,
+    PaneScrollInfo, ReadFormat, ReadSource, Request, Subscription, SubscriptionEventData,
+    SubscriptionEventEnvelope, SubscriptionEventKind,
 };
 use crate::api::server::{dispatch_to_app_with_timeout, APP_RESPONSE_TIMEOUT};
 use crate::api::{ApiRequestSender, EventHub};
+
+/// Lines a `pane.output_stream` subscription reads per poll and per snapshot.
+pub(super) const DEFAULT_OUTPUT_STREAM_LINES: u32 = 64;
+/// Upper bound on the read window, matching `pane.read`'s own clamp.
+pub(super) const MAX_OUTPUT_STREAM_LINES: u32 = 1000;
+/// How many candidate split points the delta stitch tries before it gives up
+/// and asks the client to resync. A normal append matches on the first try.
+const MAX_OUTPUT_OVERLAP_ATTEMPTS: usize = 64;
 
 pub(super) fn output_match_read_source(
     source: &crate::api::schema::ReadSource,
@@ -15,6 +25,41 @@ pub(super) fn output_match_read_source(
     match source {
         crate::api::schema::ReadSource::Recent => crate::api::schema::ReadSource::RecentUnwrapped,
         other => *other,
+    }
+}
+
+/// Splits the newest pane read into what a client holding `previous` still needs.
+///
+/// Both reads are suffixes of the same growing buffer, so the client's text is a
+/// suffix of the new read: the new output starts where the two overlap ends. A
+/// zero-length overlap means the client's text is gone (a clear or a full
+/// repaint), which is a resync rather than a delta.
+pub(super) fn output_stream_delta<'a>(
+    previous: &str,
+    next: &'a str,
+) -> (PaneOutputStreamPhase, &'a str) {
+    if previous.is_empty() {
+        return (PaneOutputStreamPhase::Snapshot, next);
+    }
+
+    let mut offset = previous.len().min(next.len());
+    let mut attempts = 0;
+    loop {
+        while offset > 0 && !next.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        if previous.ends_with(&next[..offset]) {
+            return if offset == 0 {
+                (PaneOutputStreamPhase::Resync, next)
+            } else {
+                (PaneOutputStreamPhase::Delta, &next[offset..])
+            };
+        }
+        if offset == 0 || attempts >= MAX_OUTPUT_OVERLAP_ATTEMPTS {
+            return (PaneOutputStreamPhase::Resync, next);
+        }
+        attempts += 1;
+        offset -= 1;
     }
 }
 
@@ -63,6 +108,23 @@ pub(super) struct ActiveScrollChangedSubscription {
     request_prefix: String,
 }
 
+/// Streams one pane's output: a snapshot first, then coalesced deltas.
+pub(super) struct ActiveOutputStreamSubscription {
+    pane_id: String,
+    workspace_id: String,
+    source: ReadSource,
+    lines: u32,
+    format: ReadFormat,
+    strip_ansi: bool,
+    /// The exact text the client holds, so the next delta stitches against it.
+    sent: String,
+    /// Events replayed from the retained stream history after a resubscribe.
+    replayed: std::collections::VecDeque<SubscriptionEventEnvelope>,
+    /// The first event to emit: a snapshot, or a resync after a lost replay.
+    initial_event: Option<PaneOutputStreamEvent>,
+    request_prefix: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PanePresentationSnapshot {
     title: Option<String>,
@@ -105,6 +167,7 @@ pub(super) enum ActiveSubscription {
     OutputMatched(ActiveOutputMatchedSubscription),
     AgentStatusChanged(Box<ActiveAgentStatusChangedSubscription>),
     ScrollChanged(ActiveScrollChangedSubscription),
+    OutputStream(ActiveOutputStreamSubscription),
 }
 
 impl ActiveSubscription {
@@ -190,6 +253,7 @@ impl ActiveSubscription {
                     &pane_id,
                     source,
                     lines,
+                    crate::api::schema::ReadFormat::Text,
                     strip_ansi,
                     api_tx,
                 );
@@ -247,6 +311,78 @@ impl ActiveSubscription {
                     request_prefix: format!("{request_id}:sub:{index}"),
                 }))
             }
+            Subscription::PaneOutputStream {
+                pane_id,
+                source,
+                lines,
+                format,
+                strip_ansi,
+                since_sequence,
+            } => {
+                let lines = lines
+                    .unwrap_or(DEFAULT_OUTPUT_STREAM_LINES)
+                    .clamp(1, MAX_OUTPUT_STREAM_LINES);
+                let request_prefix = format!("{request_id}:sub:{index}");
+                let probe = pane_get(format!("{request_prefix}:probe"), &pane_id, api_tx)?;
+                // Unwrapped history, like `pane.output_matched`: the client's own
+                // emulator owns wrapping, so it must receive unwrapped lines.
+                let source = output_match_read_source(&source);
+                let read = pane_read(
+                    format!("{request_prefix}:snapshot"),
+                    &pane_id,
+                    source,
+                    Some(lines),
+                    format,
+                    strip_ansi,
+                    api_tx,
+                )?;
+
+                let mut replayed = std::collections::VecDeque::new();
+                let mut sent = read.text.clone();
+                let initial_event = match since_sequence {
+                    Some(since) => match event_hub.output_stream_replay(&pane_id, since) {
+                        OutputStreamReplay::Events(events) => {
+                            for retained in events {
+                                sent = retained.event.text.clone();
+                                replayed.push_back(SubscriptionEventEnvelope {
+                                    event: SubscriptionEventKind::PaneOutputStream,
+                                    data: SubscriptionEventData::PaneOutputStream(retained.event),
+                                });
+                            }
+                            None
+                        }
+                        OutputStreamReplay::Lost => Some(PaneOutputStreamEvent {
+                            pane_id: pane_id.clone(),
+                            workspace_id: probe.workspace_id.clone(),
+                            sequence: 0,
+                            phase: PaneOutputStreamPhase::Resync,
+                            text: read.text.clone(),
+                            truncated: read.truncated,
+                        }),
+                    },
+                    None => Some(PaneOutputStreamEvent {
+                        pane_id: pane_id.clone(),
+                        workspace_id: probe.workspace_id.clone(),
+                        sequence: 0,
+                        phase: PaneOutputStreamPhase::Snapshot,
+                        text: read.text.clone(),
+                        truncated: read.truncated,
+                    }),
+                };
+
+                Ok(Self::OutputStream(ActiveOutputStreamSubscription {
+                    pane_id: probe.pane_id,
+                    workspace_id: probe.workspace_id,
+                    source,
+                    lines,
+                    format,
+                    strip_ansi,
+                    sent,
+                    replayed,
+                    initial_event,
+                    request_prefix,
+                }))
+            }
         }
     }
 
@@ -265,6 +401,9 @@ impl ActiveSubscription {
             }
             Self::ScrollChanged(subscription) => {
                 serde_json::to_value(subscription.poll(api_tx)?).ok()
+            }
+            Self::OutputStream(subscription) => {
+                serde_json::to_value(subscription.poll(api_tx, event_hub)?).ok()
             }
         }
     }
@@ -322,6 +461,7 @@ impl ActiveSubscription {
             Self::OutputMatched(_) | Self::ScrollChanged(_) => {
                 Ok(self.poll(api_tx, event_hub).into_iter().collect())
             }
+            Self::OutputStream(_) => Ok(self.poll(api_tx, event_hub).into_iter().collect()),
         }
     }
 }
@@ -368,6 +508,7 @@ impl ActiveOutputMatchedSubscription {
             &self.pane_id,
             output_match_read_source(&self.source),
             self.lines,
+            crate::api::schema::ReadFormat::Text,
             self.strip_ansi,
             api_tx,
         )
@@ -541,6 +682,66 @@ impl ActiveAgentStatusChangedSubscription {
     }
 }
 
+impl ActiveOutputStreamSubscription {
+    fn poll(
+        &mut self,
+        api_tx: &ApiRequestSender,
+        event_hub: &EventHub,
+    ) -> Option<SubscriptionEventEnvelope> {
+        if let Some(event) = self.initial_event.take() {
+            return Some(self.publish(event, event_hub));
+        }
+        if let Some(event) = self.replayed.pop_front() {
+            return Some(event);
+        }
+
+        let read = pane_read(
+            format!("{}:read", self.request_prefix),
+            &self.pane_id,
+            self.source,
+            Some(self.lines),
+            self.format,
+            self.strip_ansi,
+            api_tx,
+        )
+        .ok()?;
+        if read.text == self.sent {
+            return None;
+        }
+
+        let previous = std::mem::replace(&mut self.sent, read.text.clone());
+        let (phase, text) = output_stream_delta(&previous, &read.text);
+        if text.is_empty() {
+            return None;
+        }
+
+        Some(self.publish(
+            PaneOutputStreamEvent {
+                pane_id: self.pane_id.clone(),
+                workspace_id: self.workspace_id.clone(),
+                sequence: 0,
+                phase,
+                text: text.to_string(),
+                truncated: read.truncated,
+            },
+            event_hub,
+        ))
+    }
+
+    /// Publishes a chunk on the pane's retained stream and wraps it for the socket.
+    fn publish(
+        &self,
+        event: PaneOutputStreamEvent,
+        event_hub: &EventHub,
+    ) -> SubscriptionEventEnvelope {
+        let event = event_hub.output_stream_push(&self.pane_id, event);
+        SubscriptionEventEnvelope {
+            event: SubscriptionEventKind::PaneOutputStream,
+            data: SubscriptionEventData::PaneOutputStream(event),
+        }
+    }
+}
+
 impl ActiveScrollChangedSubscription {
     fn poll(&mut self, api_tx: &ApiRequestSender) -> Option<SubscriptionEventEnvelope> {
         let pane = pane_get(
@@ -579,6 +780,7 @@ fn pane_read(
     pane_id: &str,
     source: crate::api::schema::ReadSource,
     lines: Option<u32>,
+    format: crate::api::schema::ReadFormat,
     strip_ansi: bool,
     api_tx: &ApiRequestSender,
 ) -> Result<crate::api::schema::PaneReadResult, ErrorResponse> {
@@ -589,7 +791,7 @@ fn pane_read(
                 pane_id: pane_id.to_string(),
                 source,
                 lines,
-                format: crate::api::schema::ReadFormat::Text,
+                format,
                 strip_ansi,
                 intent: crate::api::schema::ReadIntent::Passive,
             }),
@@ -670,6 +872,55 @@ mod tests {
 
     use super::*;
     use crate::api::schema::{AgentStatus, EventData, EventEnvelope, EventKind, PaneInfo};
+
+    #[test]
+    fn stream_delta_reports_the_whole_first_read_as_a_snapshot() {
+        let (phase, text) = output_stream_delta("", "hello\n");
+        assert_eq!(phase, PaneOutputStreamPhase::Snapshot);
+        assert_eq!(text, "hello\n");
+    }
+
+    #[test]
+    fn stream_delta_reports_only_appended_output() {
+        let (phase, text) = output_stream_delta("hello\n", "hello\nworld\n");
+        assert_eq!(phase, PaneOutputStreamPhase::Delta);
+        assert_eq!(text, "world\n");
+    }
+
+    #[test]
+    fn stream_delta_skips_lines_that_slid_out_of_the_read_window() {
+        // The pane scrolled: the first lines of the previous window are gone.
+        let previous = "one\ntwo\nthree\n";
+        let next = "three\nfour\n";
+        let (phase, text) = output_stream_delta(previous, next);
+        assert_eq!(phase, PaneOutputStreamPhase::Delta);
+        assert_eq!(text, "four\n");
+    }
+
+    #[test]
+    fn stream_delta_resyncs_when_the_client_text_is_gone() {
+        // A clear-screen leaves nothing the client can stitch onto.
+        let (phase, text) = output_stream_delta("one\ntwo\n", "\u{1b}[2J\u{1b}[Hnew\n");
+        assert_eq!(phase, PaneOutputStreamPhase::Resync);
+        assert_eq!(text, "\u{1b}[2J\u{1b}[Hnew\n");
+    }
+
+    #[test]
+    fn stream_delta_never_splits_a_multi_byte_character() {
+        // "é" is two bytes; splitting it would emit invalid UTF-8.
+        let (phase, text) = output_stream_delta("caf\u{e9}\n", "caf\u{e9}\nna\u{ef}ve\n");
+        assert_eq!(phase, PaneOutputStreamPhase::Delta);
+        assert_eq!(text, "na\u{ef}ve\n");
+    }
+
+    #[test]
+    fn stream_delta_resyncs_instead_of_talking_through_a_full_repaint() {
+        let previous = "a".repeat(4096);
+        let next = "b".repeat(4096);
+        let (phase, text) = output_stream_delta(&previous, &next);
+        assert_eq!(phase, PaneOutputStreamPhase::Resync);
+        assert_eq!(text, next);
+    }
 
     fn presentation_event(title: Option<&str>) -> EventEnvelope {
         EventEnvelope {
