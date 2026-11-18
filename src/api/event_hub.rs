@@ -7,6 +7,7 @@ pub struct EventHub {
 struct EventHubState {
     next_sequence: u64,
     events: Vec<(u64, crate::api::schema::EventEnvelope)>,
+    output_streams: crate::api::output_stream_history::OutputStreamHistory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,39 @@ impl EventHub {
             return 0;
         };
         state.next_sequence
+    }
+
+    /// Publishes one `pane.output_stream` chunk, stamped with its sequence.
+    pub(crate) fn output_stream_push(
+        &self,
+        pane_id: &str,
+        event: crate::api::schema::PaneOutputStreamEvent,
+    ) -> crate::api::schema::PaneOutputStreamEvent {
+        let Ok(mut state) = self.inner.lock() else {
+            return event;
+        };
+        state.output_streams.push(pane_id, event)
+    }
+
+    /// The sequence a pane's next stream chunk would carry.
+    #[allow(dead_code)] // part of the output stream API surface
+    pub(crate) fn output_stream_sequence(&self, pane_id: &str) -> u64 {
+        let Ok(state) = self.inner.lock() else {
+            return 0;
+        };
+        state.output_streams.next_sequence(pane_id)
+    }
+
+    /// Retained stream events published after `sequence`.
+    pub(crate) fn output_stream_replay(
+        &self,
+        pane_id: &str,
+        sequence: u64,
+    ) -> crate::api::output_stream_history::OutputStreamReplay {
+        let Ok(state) = self.inner.lock() else {
+            return crate::api::output_stream_history::OutputStreamReplay::Lost;
+        };
+        state.output_streams.replay(pane_id, sequence)
     }
 }
 
