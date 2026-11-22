@@ -33,6 +33,18 @@
           "type": "integer",
           "default": "40",
           "description": "Virtual terminal height used for layout and newly created panes when no client is attached. Must be greater than zero."
+        },
+        {
+          "key": "server.node_id",
+          "type": "string",
+          "default": "\"\"",
+          "description": "Stable identity this server stamps onto every entity it reports (`node_id` on workspaces, tabs, panes, agents, the session snapshot and the `ping` reply), so a consumer holding references from several servers can tell which node each one came from. It is validated on load: a value that is blank after trimming, longer than 128 bytes, or containing a control character or a character outside `[A-Za-z0-9._:-]` is reported as a configuration diagnostic and the server answers with the `local` fallback instead. Set to `\"\"` to accept the documented `local` fallback, which names the absence of a configured identity rather than a stable one; the identity is never derived from the hostname. Changes apply on the next server restart, not on a live config reload."
+        },
+        {
+          "key": "server.agent_push_listen_addr",
+          "type": "string",
+          "default": "\"127.0.0.1:7878\"",
+          "description": "Bind address for the HTTP listener that accepts agent state-report pushes (`POST /api/v1/pane/report/agent`, the Ziki agent-state contract). Set to `\"\"` to disable the listener. The endpoint is unauthenticated and has no pane-ownership check, so it must stay on loopback: only `127.0.0.1`/`::1` (or a `localhost` hostname that resolves to them) are accepted, and any non-loopback value is rejected with a warning and disables the listener. Do not bind to `0.0.0.0` or a public interface. A bind failure is non-fatal: Herdr logs a warning and agents fall back to screen-marker and OSC-title detection."
         }
       ]
     },
@@ -1061,6 +1073,12 @@
           ]
         },
         {
+          "key": "ui.local_machine_label",
+          "type": "string",
+          "default": "Local",
+          "description": "Sidebar label for the local machine. Rename it to match a named machine fleet. Blank values fall back to Local. Sidebar token rules and machine selectors compare this label, so rules written for Local stop matching once it is renamed."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",
@@ -1069,7 +1087,7 @@
         {
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
-          "default": "[[\"state_icon\", \"machine\", \"workspace\", \"tab\"], [\"agent\"]]",
+          "default": "[[\"state_icon\", \"workspace\", \"tab\"], [\"agent\"]]",
           "description": "Default expanded Agent sidebar layout. Entries may be token strings or inline { token, fg, bold, dim, rules } style tables. Text-valued built-ins and $name metadata tokens accept up to 16 ordered rules using equals, contains, starts_with, gt, or lt; the first match overrides specified styles. Text conditions optionally accept ignore_case for ASCII matching; numeric conditions require full finite numbers. state_icon accepts fixed styles only. At most 16 rows and 16 tokens per row."
         },
         {
@@ -1441,6 +1459,18 @@
           "type": "integer",
           "default": "100",
           "description": "Milliseconds between automatic agent restores after a server restart. The first agent starts without this delay; 0 disables spacing. Does not delay manual launches or explicit terminal attaches. Restart the server to apply."
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "title": "Agents",
+      "keys": [
+        {
+          "key": "agent.start.nice",
+          "type": "integer",
+          "default": "0",
+          "description": "CPU scheduling priority applied to a freshly started agent and to every child it forks, from -20 (most aggressive) to 19 (most deferred). The agent ends up at exactly this priority: on macOS, whose `nice` adjusts the caller's priority instead of setting it, Herdr compensates for the priority the pane's shell already runs at. 0 leaves the launch line unchanged. A per-launch `herdr agent start --nice` value overrides this default, and an explicit `--nice 0` also overrides it. Negative values need elevated privileges. Unix only; other platforms ignore the setting."
         }
       ]
     },

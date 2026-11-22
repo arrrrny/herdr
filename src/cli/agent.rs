@@ -257,6 +257,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
         pane_id,
         args: agent_args,
         timeout_ms,
+        nice,
     } = params;
     let Some(expected_kind) = crate::detect::parse_agent_label(&kind) else {
         eprintln!("unsupported interactive agent kind: {kind}");
@@ -288,6 +289,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
                 pane_id: pane_id.clone(),
                 args: agent_args.clone(),
                 timeout_ms,
+                nice,
             }),
         })?;
         if response.get("error").is_none() {
@@ -333,6 +335,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
         timeout,
         &expected_kind,
         expected_terminal_id,
+        priority_program(&response),
     );
     match waited {
         Ok(Ok(agent)) => {
@@ -396,15 +399,34 @@ fn wait_for_named_agent(
     timeout: Duration,
     expected_kind: &str,
     expected_terminal_id: &str,
+    priority_program: Option<&str>,
 ) -> std::io::Result<Result<serde_json::Value, serde_json::Value>> {
     let deadline = Instant::now().checked_add(timeout);
     let mut first_poll = true;
     loop {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             // Let the server reconcile its matching startup deadline before
-            // returning so the pending name is immediately reusable.
-            let _ = resolve_agent_target_unchecked(name, "cli:agent:start:timeout");
-            return Ok(Err(agent_wait_timeout()));
+            // returning so the pending name is immediately reusable. Poll for
+            // up to ~1s so a server whose clock lags the client's actually
+            // releases the name before we return (avoids `agent_name_taken` on
+            // the next attempt with the same name).
+            let release_deadline = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < release_deadline {
+                // Reconcile; if the name is no longer resolvable (an error
+                // response) the server has released it. Transport failures
+                // also end the wait (`.unwrap_or(true)`): this is a bounded
+                // best-effort wait, so the CLI must not hang on a dead server
+                // even if a later start with the same name can still hit
+                // `agent_name_taken`.
+                if resolve_agent_target_unchecked(name, "cli:agent:start:timeout")
+                    .map(|r| r.get("error").is_some())
+                    .unwrap_or(true)
+                {
+                    break;
+                }
+                std::thread::sleep(AGENT_START_POLL_INTERVAL);
+            }
+            return Ok(Err(agent_wait_timeout(priority_program)));
         }
         let poll_id = "cli:agent:start";
         let mut response = if first_poll {
@@ -439,7 +461,10 @@ fn wait_for_named_agent(
                 Some("blocked") => Some(Err(cli_agent_error(
                     "cli:agent:start",
                     "agent_not_ready",
-                    format!("agent {name} is blocked during startup and is not ready for prompts"),
+                    format!(
+                        "agent {name} is blocked during startup and is not ready for prompts{}",
+                        priority_program_hint(priority_program)
+                    ),
                 ))),
                 Some("unknown")
                     if expected_kind == "codex"
@@ -497,24 +522,31 @@ fn process_info_shows_shell_initialization(process_info: &serde_json::Value) -> 
     let Some(shell_pid) = process_info["shell_pid"].as_u64() else {
         return false;
     };
-    if process_info["foreground_process_group_id"].as_u64() != Some(shell_pid) {
-        return false;
+    // A freshly spawned shell may not have settled its foreground process
+    // group yet, so foreground_process_group_id can be missing or 0. Treat
+    // that as "still initializing" rather than "not a shell" so the retry
+    // loop waits for the process group to settle instead of giving up.
+    match process_info["foreground_process_group_id"].as_u64() {
+        Some(fg) if fg != 0 && fg != shell_pid => return false,
+        _ => {}
     }
-    process_info["foreground_processes"]
-        .as_array()
-        .is_some_and(|processes| {
-            processes.iter().any(|process| {
-                process["pid"].as_u64() == Some(shell_pid)
-                    && (process["name"]
-                        .as_str()
-                        .is_some_and(crate::platform::is_pane_shell_process_name)
-                        || process["argv"]
-                            .as_array()
-                            .and_then(|argv| argv.first())
-                            .and_then(serde_json::Value::as_str)
-                            .is_some_and(crate::platform::is_pane_shell_process_name))
-            })
-        })
+    // If foreground process info is present, require the shell to be among
+    // them; if it is absent entirely (not yet populated), still treat as
+    // initializing so the retry loop can wait.
+    match process_info["foreground_processes"].as_array() {
+        Some(processes) if !processes.is_empty() => processes.iter().any(|process| {
+            process["pid"].as_u64() == Some(shell_pid)
+                && (process["name"]
+                    .as_str()
+                    .is_some_and(crate::platform::is_pane_shell_process_name)
+                    || process["argv"]
+                        .as_array()
+                        .and_then(|argv| argv.first())
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(crate::platform::is_pane_shell_process_name))
+        }),
+        _ => true,
+    }
 }
 
 // Windows exposes no foreground process group, so shell initialization is not
@@ -550,12 +582,37 @@ fn print_agent_transport_error(
     super::print_response(&cli_agent_error(request_id, code, err.to_string()))
 }
 
-fn agent_wait_timeout() -> serde_json::Value {
+fn agent_wait_timeout(priority_program: Option<&str>) -> serde_json::Value {
     cli_agent_error(
         "cli:agent:start",
         "timeout",
-        "timed out waiting for agent startup",
+        format!(
+            "timed out waiting for agent startup{}",
+            priority_program_hint(priority_program)
+        ),
     )
+}
+
+/// Returns the priority program the launch line named, if it named one.
+fn priority_program(response: &serde_json::Value) -> Option<&str> {
+    response["result"]["argv"]
+        .as_array()
+        .and_then(|argv| argv.first())
+        .and_then(|first| first.as_str())
+        .filter(|first| crate::platform::agent_nice_program() == Some(*first))
+}
+
+/// Names the priority program in a startup error, when the launch used one.
+///
+/// The launch line runs the program, so a pane whose search path lacks it
+/// never starts the agent. The operator needs to know which program it was.
+fn priority_program_hint(priority_program: Option<&str>) -> String {
+    match priority_program {
+        Some(program) => format!(
+            " (the launch used the {program} program, which the pane's shell may not have found on its search path)"
+        ),
+        None => String::new(),
+    }
 }
 
 fn cli_agent_error(id: &str, code: &str, message: impl Into<String>) -> serde_json::Value {
@@ -613,4 +670,102 @@ fn agent_read(params: AgentReadParams) -> std::io::Result<i32> {
         method: Method::AgentRead(params),
     })?;
     super::print_read_response(&response)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::process_info_shows_shell_initialization;
+    use serde_json::json;
+
+    fn shell_process(pid: u64, name: &str) -> serde_json::Value {
+        json!({ "pid": pid, "name": name, "argv": [name] })
+    }
+
+    fn process_info(
+        shell_pid: Option<u64>,
+        fg_pgid: Option<u64>,
+        foreground_processes: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut info = serde_json::Map::new();
+        if let Some(pid) = shell_pid {
+            info.insert("shell_pid".into(), json!(pid));
+        }
+        if let Some(pgid) = fg_pgid {
+            info.insert("foreground_process_group_id".into(), json!(pgid));
+        }
+        if let Some(processes) = foreground_processes {
+            info.insert("foreground_processes".into(), processes);
+        }
+        serde_json::Value::Object(info)
+    }
+
+    #[test]
+    fn initialization_true_when_fg_pgid_missing_zero_or_matches_shell_pid() {
+        // A freshly spawned shell may not have settled its foreground
+        // process group yet: missing or zero fg pgid, or the fg pgid still
+        // being the shell's own, reads as "still initializing".
+        for fg_pgid in [None, Some(0), Some(4242)] {
+            let info = process_info(
+                Some(4242),
+                fg_pgid,
+                Some(json!([shell_process(4242, "zsh")])),
+            );
+            assert!(
+                process_info_shows_shell_initialization(&info),
+                "fg pgid {fg_pgid:?} must read as still initializing"
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_true_when_foreground_processes_absent_or_empty() {
+        // Empty or absent foreground process info means the pane's process
+        // table is not populated yet: still initializing, so the busy-retry
+        // loop keeps waiting (up to PANE_SHELL_READINESS_RETRY_TIMEOUT)
+        // instead of failing fast with agent_pane_busy.
+        for processes in [None, Some(json!([]))] {
+            let info = process_info(Some(4242), Some(0), processes.clone());
+            assert!(
+                process_info_shows_shell_initialization(&info),
+                "foreground_processes {processes:?} must read as still initializing"
+            );
+        }
+    }
+
+    #[test]
+    fn initialization_false_when_foreign_fg_pgid_owns_the_foreground() {
+        let info = process_info(
+            Some(4242),
+            Some(5000),
+            Some(json!([shell_process(5000, "vim")])),
+        );
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_false_when_shell_pid_missing() {
+        let info = process_info(None, Some(0), Some(json!([])));
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_false_when_shell_missing_from_populated_foreground_processes() {
+        let info = process_info(
+            Some(4242),
+            Some(0),
+            Some(json!([shell_process(5000, "make")])),
+        );
+        assert!(!process_info_shows_shell_initialization(&info));
+    }
+
+    #[test]
+    fn initialization_true_when_login_shell_listed_by_argv0() {
+        // `-zsh` (login-shell argv0) normalizes to `zsh`.
+        let info = process_info(
+            Some(4242),
+            None,
+            Some(json!([{ "pid": 4242, "name": "zsh", "argv": ["-zsh"] }])),
+        );
+        assert!(process_info_shows_shell_initialization(&info));
+    }
 }

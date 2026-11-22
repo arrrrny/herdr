@@ -30,6 +30,13 @@ impl std::ops::Deref for ComposedFrame {
 
 static RECEIVED_KITTY_GRAPHICS_IDS: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 
+/// Image id used for the local-file capability probe.
+///
+/// Deliberately far above the low ids real clients allocate, so the probe cannot
+/// collide with a placement a third-party client is already using. The probe is
+/// deleted immediately after upload, so nothing is left behind either way.
+const PROBE_IMAGE_ID: u32 = 0x7fff_0000;
+
 pub(super) fn write_composed_frame(
     mut writer: impl io::Write,
     encoded: &[u8],
@@ -58,9 +65,22 @@ pub(super) fn write_composed_frame(
                         .probe()
                         .and_then(|path| path.to_str().map(str::to_owned))
                     {
+                        // Use an id no third-party client is likely to pick and
+                        // delete it again straight away. Leaving a 1x1 probe
+                        // behind under id 1 (the de-facto first id) means a
+                        // later real placement at id 1 clobbers it, and the
+                        // probe can then resurface over that client's image.
                         let path =
                             base64::engine::general_purpose::STANDARD.encode(path.as_bytes());
-                        write!(writer, "\x1b_Ga=q,t=t,f=32,s=1,v=1,i=1,q=2;{path}\x1b\\")?;
+                        write!(
+                            writer,
+                            "\x1b_Ga=q,t=t,f=32,s=1,v=1,i={PROBE_IMAGE_ID},q=2;{path}\x1b\\"
+                        )?;
+                        // The delete has to be id-targeted: `d=A` deletes every
+                        // placement visible on the host screen and never looks
+                        // at `i=`, so it would wipe unrelated images while
+                        // leaving the stored probe behind.
+                        write!(writer, "\x1b_Ga=d,d=I,i={PROBE_IMAGE_ID},q=2;\x1b\\")?;
                     }
                 }
                 let path = file_eligible.then(|| files.prepare(data)).flatten();

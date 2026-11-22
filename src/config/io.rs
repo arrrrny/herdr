@@ -6,6 +6,7 @@ use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "advanced",
+    "agent",
     "experimental",
     "keys",
     "onboarding",
@@ -321,6 +322,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
     load_live_section(
         table,
+        "agent",
+        "agent config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.agent = section,
+    );
+    load_live_section(
+        table,
         "server",
         "server config",
         &mut diagnostics,
@@ -377,6 +386,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     );
 
     diagnostics.extend(config.theme.diagnostics());
+    diagnostics.extend(config.invalid_agent_start_nice_diagnostic());
 
     Ok(LoadedConfig {
         config,
@@ -1197,5 +1207,72 @@ mouse_capture = false
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
         assert_eq!(loaded.config.terminal.default_shell, "pwsh.exe");
+    }
+
+    #[test]
+    fn load_live_config_parses_the_agent_start_section() {
+        let loaded = load_live_config_from_str(
+            r#"
+[agent.start]
+nice = 19
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.config.agent.start.nice, 19);
+        assert_eq!(loaded.config.agent_start_nice(), 19);
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn load_live_config_defaults_the_agent_start_priority_to_zero() {
+        let loaded =
+            load_live_config_from_str("[session]\nresume_agents_on_restore = true\n").unwrap();
+
+        assert_eq!(loaded.config.agent.start.nice, 0);
+        assert_eq!(loaded.config.agent_start_nice(), 0);
+    }
+
+    #[test]
+    fn load_live_config_reports_an_out_of_range_agent_start_priority() {
+        let loaded = load_live_config_from_str(
+            r#"
+[agent.start]
+nice = 20
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(loaded.config.agent.start.nice, 20);
+        assert_eq!(loaded.config.agent_start_nice(), 0);
+        assert!(
+            loaded
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("agent.start.nice")),
+            "expected a diagnostic naming the key: {:?}",
+            loaded.diagnostics
+        );
+    }
+
+    #[test]
+    fn the_agent_section_is_a_known_top_level_section() {
+        let loaded = load_live_config_from_str(
+            r#"
+[agent.start]
+nice = 5
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            !loaded
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("unknown top-level section")),
+            "expected the agent section to be known: {:?}",
+            loaded.diagnostics
+        );
     }
 }

@@ -25,6 +25,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
+    pub(super) local_machine_label: String,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
@@ -723,6 +724,12 @@ pub(crate) enum ClientShellNotificationEffect {
     System {
         title: String,
         body: Option<String>,
+        /// Public pane id (`<workspace_id>:p<encoded>`) used as the macOS
+        /// system-notification click target; `None` when the originating
+        /// event carries no pane (e.g. update-ready toasts). Windows routes its
+        /// own actionable target through `target` instead.
+        #[cfg(not(windows))]
+        click_target: Option<String>,
         #[cfg(windows)]
         target: Option<ClientSystemNotificationTarget>,
     },
@@ -1030,6 +1037,8 @@ impl ClientShellState {
                 .or_default()
                 .extend(saved.collapsed_groups);
         }
+        let mut local_machine_endpoint = local_endpoint();
+        local_machine_endpoint.label = config.local_machine_label.clone();
         Self {
             machine_diagnostics: Default::default(),
             config,
@@ -1071,7 +1080,7 @@ impl ClientShellState {
             last_composed_at: None,
             selection_repaint_deadline: None,
             hits: ShellHitMap::default(),
-            endpoints: vec![local_endpoint()],
+            endpoints: vec![local_machine_endpoint],
             active_endpoint_id: ClientEndpointId::Local,
             collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,

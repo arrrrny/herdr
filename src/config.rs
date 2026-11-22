@@ -76,6 +76,8 @@ pub(crate) fn config_diagnostic_summary_without_keybindings(
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
 pub const DEFAULT_MOUSE_SCROLL_LINES: usize = 3;
 pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;
+/// Sidebar label for the local machine when `ui.local_machine_label` is unset.
+pub const DEFAULT_LOCAL_MACHINE_LABEL: &str = "Local";
 pub const DEFAULT_HEADLESS_COLS: u16 = 120;
 pub const DEFAULT_HEADLESS_ROWS: u16 = 40;
 
@@ -123,6 +125,8 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.invalid_node_id_diagnostic())
+            .chain(self.invalid_agent_start_nice_diagnostic())
             .collect()
     }
 
@@ -141,6 +145,55 @@ impl Config {
                 self.server.headless_cols, self.server.headless_rows
             )
         })
+    }
+
+    /// The node identity this server stamps onto every entity it reports.
+    ///
+    /// An absent or blank `server.node_id` resolves to the documented
+    /// `local` fallback, which is deliberately not a stable identity.
+    pub(crate) fn node_id(&self) -> crate::node::NodeId {
+        crate::node::resolve_node_id(&self.server.node_id)
+            .unwrap_or_else(|_| crate::node::NodeId::fallback())
+    }
+
+    /// Reports a `server.node_id` that cannot be used.
+    ///
+    /// The value is never silently accepted: it is reported and the server
+    /// answers with the fallback identity instead of a half-validated one.
+    pub(crate) fn invalid_node_id_diagnostic(&self) -> Option<String> {
+        crate::node::resolve_node_id(&self.server.node_id)
+            .err()
+            .map(|err| {
+                format!(
+                    "server.node_id {:?} is not a usable node identity ({err}); falling back to {:?}",
+                    self.server.node_id,
+                    crate::node::FALLBACK_NODE_ID
+                )
+            })
+    }
+
+    /// Reports an out-of-range `[agent.start] nice` value.
+    ///
+    /// The value is never clamped: an invalid default is reported and the
+    /// effective default falls back to "no priority prefix".
+    pub(crate) fn invalid_agent_start_nice_diagnostic(&self) -> Option<String> {
+        (!crate::agent_priority::is_valid(self.agent.start.nice)).then(|| {
+            format!(
+                "agent.start.nice ({}) is outside the supported range {}..={}",
+                self.agent.start.nice,
+                crate::agent_priority::MIN,
+                crate::agent_priority::MAX
+            )
+        })
+    }
+
+    /// The validated default scheduling priority for freshly started agents.
+    pub(crate) fn agent_start_nice(&self) -> i32 {
+        if self.invalid_agent_start_nice_diagnostic().is_some() {
+            0
+        } else {
+            self.agent.start.nice
+        }
     }
 
     pub(crate) fn invalid_sidebar_bounds_diagnostic(&self) -> Option<String> {

@@ -218,6 +218,7 @@ impl App {
             .max_by_key(|(state, seen)| tab_attention_priority(*state, *seen))
             .unwrap_or((crate::detect::AgentState::Unknown, true));
         Some(crate::api::schema::TabInfo {
+            node_id: self.state.node_id.to_string(),
             tab_id: self.public_tab_id(ws_idx, tab_idx)?,
             workspace_id: self.public_workspace_id(ws_idx),
             number: tab.number,
@@ -338,6 +339,7 @@ impl App {
                 .is_some_and(|focused| focused == pane_id);
         let presentation = terminal.effective_presentation();
         Some(crate::api::schema::PaneInfo {
+            node_id: self.state.node_id.to_string(),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),
@@ -389,6 +391,7 @@ impl App {
         let ws = &self.state.workspaces[index];
         let (agg_state, seen) = ws.aggregate_state(&self.state.terminals);
         crate::api::schema::WorkspaceInfo {
+            node_id: self.state.node_id.to_string(),
             workspace_id: self.public_workspace_id(index),
             number: index + 1,
             label: ws.display_name_from(&self.state.terminals, &self.terminal_runtimes),

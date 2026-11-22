@@ -1,4 +1,8 @@
-name: Close pending-release issues
+# Fork delta: upstream reads secrets.KANGAL_GITHUB_TOKEN, which is not configured
+# in this fork, so the workflow could never run here. This fork uses the built-in
+# GITHUB_TOKEN and only labels the referenced issues -- closing stays with
+# release.yml, which closes them after the GitHub Release exists.
+name: Label pending-release issues
 
 on:
   push:
@@ -12,7 +16,8 @@ env:
   NEXT_RELEASE_LABEL: pending-release
 
 jobs:
-  close:
+  label:
+    name: Label pending-release issues
     runs-on: ubuntu-latest
 
     steps:
@@ -21,14 +26,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Close issues referenced by pushed commits
+      - name: Label issues referenced by pushed commits
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.KANGAL_GITHUB_TOKEN }}
+          # fork: upstream uses secrets.KANGAL_GITHUB_TOKEN, unset in this fork.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          echo "Using GitHub token for $(gh api user --jq .login)."
+          echo "Using GitHub token for $(gh api "repos/${GITHUB_REPOSITORY}" --jq .full_name)."
 
           BEFORE="${{ github.event.before }}"
           AFTER="${{ github.sha }}"
@@ -88,8 +94,6 @@ jobs:
               continue
             fi
 
-            ISSUE_STATE="$(jq -r '.state' <<<"$data")"
-
             HAS_NEXT_RELEASE_LABEL="$(jq -r --arg label "$NEXT_RELEASE_LABEL" 'any(.labels[].name; . == $label)' <<<"$data")"
             if [ "$HAS_NEXT_RELEASE_LABEL" != "true" ]; then
               if ! gh issue edit "$issue" --repo "$GITHUB_REPOSITORY" --add-label "$NEXT_RELEASE_LABEL"; then
@@ -103,27 +107,10 @@ jobs:
             if [ "$MARKER_STATUS" -eq 2 ]; then
               continue
             fi
-            HAS_PENDING_COMMENT="false"
             if [ "$MARKER_STATUS" -eq 0 ]; then
-              HAS_PENDING_COMMENT="true"
-            fi
-
-            if [ "$ISSUE_STATE" = "open" ]; then
-              if [ "$HAS_PENDING_COMMENT" = "true" ]; then
-                if ! gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed; then
-                  echo "::warning::Could not close issue #$issue."
-                  continue
-                fi
-              elif ! gh issue close "$issue" --repo "$GITHUB_REPOSITORY" --reason completed --comment "$PENDING_COMMENT"; then
-                echo "::warning::Could not close issue #$issue."
-                continue
-              fi
-            elif [ "$HAS_PENDING_COMMENT" != "true" ]; then
-              if ! gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$PENDING_COMMENT"; then
-                echo "::warning::Could not comment on closed issue #$issue."
-                continue
-              fi
-            else
               echo "Skipping pending-release comment for #$issue because it already exists."
+            elif ! gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$PENDING_COMMENT"; then
+              echo "::warning::Could not comment on issue #$issue."
+              continue
             fi
           done

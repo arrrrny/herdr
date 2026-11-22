@@ -63,6 +63,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         }],
         agents: Vec::new(),
         commands: Vec::new(),
+        badges: Vec::new(),
     }
 }
 
@@ -176,6 +177,7 @@ fn pane_scroll_result(
 ) -> crate::api::schema::ResponseResult {
     crate::api::schema::ResponseResult::PaneInfo {
         pane: crate::api::schema::PaneInfo {
+            node_id: "test-node".into(),
             pane_id: "pane_1".into(),
             terminal_id: "terminal_1".into(),
             workspace_id: "ws_1".into(),

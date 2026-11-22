@@ -100,6 +100,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             pane_id: "w1:p2".into(),
             args: vec!["--no-session".into()],
             timeout_ms: Some(30_000),
+            nice: Some(19),
         }),
     };
     let start_json = serde_json::to_value(&start).unwrap();
@@ -531,6 +532,46 @@ fn pane_process_info_request_round_trips() {
 }
 
 #[test]
+fn pane_process_info_carries_the_scheduling_priority() {
+    let process = PaneProcessInfoProcess {
+        pid: 42,
+        name: "pi".into(),
+        argv0: Some("pi".into()),
+        argv: Some(vec!["pi".into()]),
+        cmdline: Some("pi".into()),
+        cwd: Some("/tmp".into()),
+        nice: Some(19),
+    };
+
+    let json = serde_json::to_value(&process).unwrap();
+    assert_eq!(json["nice"], 19);
+    assert_eq!(
+        serde_json::from_value::<PaneProcessInfoProcess>(json).unwrap(),
+        process
+    );
+}
+
+#[test]
+fn pane_process_info_omits_an_unknown_scheduling_priority() {
+    let process = PaneProcessInfoProcess {
+        pid: 42,
+        name: "pi".into(),
+        argv0: None,
+        argv: None,
+        cmdline: None,
+        cwd: None,
+        nice: None,
+    };
+
+    let json = serde_json::to_value(&process).unwrap();
+    assert!(json.get("nice").is_none(), "{json}");
+    assert_eq!(
+        serde_json::from_value::<PaneProcessInfoProcess>(json).unwrap(),
+        process
+    );
+}
+
+#[test]
 fn event_envelope_round_trips() {
     let events = [
         EventEnvelope {
@@ -626,6 +667,12 @@ fn subscribe_request_parses_parameterized_subscriptions() {
                 {
                     "type": "pane.scroll_changed",
                     "pane_id": "p_1_1"
+                },
+                {
+                    "type": "pane.output_stream",
+                    "pane_id": "p_1_1",
+                    "lines": 40,
+                    "since_sequence": 7
                 }
             ]
         }
@@ -636,7 +683,7 @@ fn subscribe_request_parses_parameterized_subscriptions() {
     let Method::EventsSubscribe(params) = request.method else {
         panic!("wrong method parsed");
     };
-    assert_eq!(params.subscriptions.len(), 3);
+    assert_eq!(params.subscriptions.len(), 4);
     assert!(matches!(
         &params.subscriptions[0],
         Subscription::PaneOutputMatched {
@@ -657,6 +704,17 @@ fn subscribe_request_parses_parameterized_subscriptions() {
     assert!(matches!(
         &params.subscriptions[2],
         Subscription::PaneScrollChanged { pane_id } if pane_id == "p_1_1"
+    ));
+    assert!(matches!(
+        &params.subscriptions[3],
+        Subscription::PaneOutputStream {
+            pane_id,
+            source: ReadSource::Recent,
+            lines: Some(40),
+            format: ReadFormat::Ansi,
+            strip_ansi: false,
+            since_sequence: Some(7),
+        } if pane_id == "p_1_1"
     ));
 }
 
@@ -721,6 +779,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                node_id: "test-node".into(),
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
@@ -751,6 +810,7 @@ fn session_snapshot_request_and_response_round_trip() {
         id: "req_snapshot".into(),
         result: ResponseResult::SessionSnapshot {
             snapshot: Box::new(SessionSnapshot {
+                node_id: "test-node".into(),
                 version: "0.1.2".into(),
                 protocol: 16,
                 focused_workspace_id: None,
@@ -792,6 +852,7 @@ fn worktree_request_and_response_round_trip() {
         id: "req_worktree".into(),
         result: ResponseResult::WorktreeCreated {
             workspace: WorkspaceInfo {
+                node_id: "test-node".into(),
                 workspace_id: "w_1".into(),
                 number: 2,
                 label: "herdr".into(),
@@ -810,6 +871,7 @@ fn worktree_request_and_response_round_trip() {
                 }),
             },
             tab: TabInfo {
+                node_id: "test-node".into(),
                 tab_id: "w_1:1".into(),
                 workspace_id: "w_1".into(),
                 number: 1,
@@ -819,6 +881,7 @@ fn worktree_request_and_response_round_trip() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                node_id: "test-node".into(),
                 pane_id: "w_1-1".into(),
                 terminal_id: "term_1".into(),
                 workspace_id: "w_1".into(),
@@ -879,6 +942,7 @@ fn worktree_lifecycle_events_round_trip() {
     assert_eq!(restored, subscription);
 
     let workspace = WorkspaceInfo {
+        node_id: "test-node".into(),
         workspace_id: "w_2".into(),
         number: 2,
         label: "herdr".into(),
@@ -1239,6 +1303,7 @@ fn create_response_round_trips_with_root_pane() {
         id: "req_2".into(),
         result: ResponseResult::TabCreated {
             tab: TabInfo {
+                node_id: "test-node".into(),
                 tab_id: "w_1:2".into(),
                 workspace_id: "w_1".into(),
                 number: 2,
@@ -1248,6 +1313,7 @@ fn create_response_round_trips_with_root_pane() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                node_id: "test-node".into(),
                 pane_id: "w_1-3".into(),
                 terminal_id: "term_example".into(),
                 workspace_id: "w_1".into(),

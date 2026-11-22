@@ -249,8 +249,12 @@ class WindowsInputGauntletTests(unittest.TestCase):
                                       "width": 120, "height": 30, "case": "letter-a", "status": "not_run"}]}
         self.assertEqual(summarize(document)["coverage_missing"], 2)
         document["observations"][0]["mode"] = "kitty"
-        with self.assertRaisesRegex(ValueError, "outside the declared run matrix"):
-            summarize(document)
+        # Matrix drift is reported rather than raised so the run's evidence still
+        # survives into report.json.
+        drifted = summarize(document)
+        self.assertIn("1 observations outside the declared run matrix", drifted["errors"])
+        self.assertEqual(drifted["coverage_missing"], 3)
+        self.assertEqual([row["mode"] for row in drifted["observations"]], ["kitty"])
 
     def test_direct_legacy_limit_requires_unsupported_from_every_channel(self):
         observations = [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
@@ -333,6 +337,29 @@ class WindowsInputGauntletTests(unittest.TestCase):
         self.assertGreater(partial["coverage_missing"], 0)
         for status in ["unsupported", "not_run", "inconclusive"]:
             self.assertEqual(verdict(self.cases["letter-a"], "legacy", {**row, "status": status})[0], status)
+
+    def test_out_of_matrix_observations_are_reported_without_sorting_errors(self):
+        row = {
+            **self.evidence,
+            "case": "letter-a",
+            "host": "stable",
+            "path": "herdr",
+            "mode": "legacy",
+            "phase": "unexpected",
+            "width": 120,
+            "height": 30,
+            "outer_geometry": [120, 30],
+            "final_outer_geometry": [120, 30],
+        }
+        result = summarize({
+            "observations": [row],
+            "geometries": [{"width": 120, "height": 30, "full": True}],
+            "cases": ["letter-a"],
+            "channels": ["stable"],
+            "paths": ["herdr"],
+            "modes": ["legacy"],
+        })
+        self.assertIn("1 observations outside the declared run matrix", result["errors"])
 
     def test_malformed_native_records_are_inconclusive_not_exceptions(self):
         evidence = {**self.evidence, "scans": [30]}

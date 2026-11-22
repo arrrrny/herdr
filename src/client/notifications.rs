@@ -6,8 +6,17 @@ use crate::protocol::NotifyKind;
 
 use super::shell;
 
+// The macOS click target (fork) rides along with the untargeted delivery path
+// upstream factored out. Windows has no use for it: its toast carries the
+// endpoint/pane target instead.
 #[cfg(not(windows))]
-use crate::platform::show_desktop_notification as show_untargeted_system_notification;
+fn show_untargeted_system_notification(
+    title: &str,
+    body: Option<&str>,
+    click_target: Option<&str>,
+) -> io::Result<bool> {
+    crate::platform::show_desktop_notification(title, body, click_target)
+}
 
 #[cfg(windows)]
 fn queue_system_notification(
@@ -41,7 +50,11 @@ fn queue_system_notification(
 }
 
 #[cfg(windows)]
-fn show_untargeted_system_notification(title: &str, body: Option<&str>) -> io::Result<bool> {
+fn show_untargeted_system_notification(
+    title: &str,
+    body: Option<&str>,
+    _click_target: Option<&str>,
+) -> io::Result<bool> {
     let title = title.to_owned();
     let body = body.map(str::to_owned);
     queue_system_notification(move || {
@@ -71,13 +84,19 @@ pub(super) fn handle_shell_notification_effects(
             shell::ClientShellNotificationEffect::System {
                 title,
                 body,
+                #[cfg(not(windows))]
+                click_target,
                 #[cfg(windows)]
                 target,
             } => {
                 #[cfg(windows)]
                 let result = show_system_notification(&title, body.as_deref(), target, event_tx);
                 #[cfg(not(windows))]
-                let result = crate::platform::show_desktop_notification(&title, body.as_deref());
+                let result = show_untargeted_system_notification(
+                    &title,
+                    body.as_deref(),
+                    click_target.as_deref(),
+                );
                 if let Err(err) = result {
                     warn!(err = %err, "failed to emit system notification");
                 }
@@ -94,7 +113,7 @@ fn show_system_notification(
     event_tx: &tokio::sync::mpsc::Sender<super::events::ClientLoopEvent>,
 ) -> io::Result<bool> {
     let Some(target) = target else {
-        return show_untargeted_system_notification(title, body);
+        return show_untargeted_system_notification(title, body, None);
     };
     let key = serde_json::to_string(&(
         &target.endpoint_id.storage_key(),
@@ -139,6 +158,8 @@ pub(super) fn handle_notify(
         body,
         sound_config,
         crate::terminal_notify::show_notification,
+        // The legacy path has no pane target on any platform; Windows ignores the
+        // argument because its toast target is built elsewhere.
         show_untargeted_system_notification,
     );
 }
@@ -149,7 +170,7 @@ pub(super) fn handle_notify_with_notifiers(
     body: Option<&str>,
     sound_config: &crate::config::SoundConfig,
     mut show_terminal_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
-    mut show_system_notification: impl FnMut(&str, Option<&str>) -> io::Result<bool>,
+    mut show_system_notification: impl FnMut(&str, Option<&str>, Option<&str>) -> io::Result<bool>,
 ) {
     match kind {
         NotifyKind::Sound => {
@@ -178,7 +199,10 @@ pub(super) fn handle_notify_with_notifiers(
                 message = message,
                 "received system toast notification from server"
             );
-            if let Err(err) = show_system_notification(message, body) {
+            // The legacy flat SystemToast path has no pane target; pass
+            // None so the macOS click-handler skips dispatching a
+            // `pane.focus` request for these notifications.
+            if let Err(err) = show_system_notification(message, body, None) {
                 warn!(err = %err, "failed to emit system notification");
             }
         }

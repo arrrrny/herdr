@@ -16,6 +16,20 @@ pub(super) fn merged_config_diagnostic(
 }
 
 impl ClientShellState {
+    /// Apply the configured local machine label to the local endpoint row.
+    pub(super) fn sync_local_endpoint_label(&mut self) {
+        let label = self.config.local_machine_label.clone();
+        if let Some(local) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id.is_local())
+        {
+            if local.label != label {
+                local.label = label;
+            }
+        }
+    }
+
     pub(super) fn refresh_host_palette(&mut self) -> bool {
         let effective = crate::app::client_palette_for_appearance(
             &self.config.theme_runtime,
@@ -105,6 +119,7 @@ impl ClientShellState {
                     &loaded.diagnostics,
                     &loaded.invalid_sections,
                 );
+                self.sync_local_endpoint_label();
                 self.refresh_host_palette();
                 if !self.sidebar_width_manual {
                     self.sidebar_width = self.config.sidebar_width;
@@ -148,6 +163,7 @@ impl ClientShellConfig {
             agents: config.ui.sidebar.agents.clone(),
             agent_panel_sort: config.ui.agent_panel_sort,
             status_indicators: config.ui.status_indicators,
+            local_machine_label: config.ui.local_machine_label_trimmed(),
             sound_enabled: config.ui.sound.enabled,
             toast_delivery: config.ui.toast.delivery,
             toast_delay_seconds: config.ui.toast.delay_seconds,
@@ -375,6 +391,7 @@ impl ClientShellConfig {
                 self.agents = ui.sidebar.agents.clone();
                 self.agent_panel_sort = ui.agent_panel_sort;
                 self.status_indicators = ui.status_indicators;
+                self.local_machine_label = ui.local_machine_label_trimmed();
                 self.sound_enabled = ui.sound.enabled;
                 self.toast_delivery = ui.toast.delivery;
                 self.toast_delay_seconds = ui.toast.delay_seconds;
@@ -565,6 +582,23 @@ mod tests {
         let state = ClientShellState::new(config);
         assert_eq!(initial, state.surface_size(100, 30));
         std::fs::remove_file(path).expect("remove endpoint chrome");
+    }
+
+    #[test]
+    fn live_reload_applies_local_machine_label() {
+        let mut shell = ClientShellConfig::from_config(&Config::default());
+        assert_eq!(shell.local_machine_label, "Local");
+
+        let mut next = Config::default();
+        next.ui.local_machine_label = "  i9  ".into();
+        let diagnostics = shell.apply_live_config(&next, &[], &[]);
+        assert!(diagnostics.is_empty());
+        assert_eq!(shell.local_machine_label, "i9");
+
+        let mut blank = Config::default();
+        blank.ui.local_machine_label = "   ".into();
+        shell.apply_live_config(&blank, &[], &[]);
+        assert_eq!(shell.local_machine_label, "Local");
     }
 
     #[test]

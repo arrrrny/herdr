@@ -202,6 +202,10 @@ pub enum ResponseResult {
         changed: bool,
         reason: ClientWindowTitleReason,
     },
+    ClientActivateEndpoint {
+        /// Whether a running client shell that understands the request received it.
+        delivered: bool,
+    },
     IntegrationList {
         integrations: Vec<super::integrations::IntegrationInfo>,
     },
@@ -278,6 +282,18 @@ pub enum ResponseResult {
         projection_revision: u64,
     },
     Ok {},
+    BadgeList {
+        badges: Vec<crate::api::schema::BadgeInfo>,
+    },
+    BadgeSet {
+        key: String,
+        text: String,
+        color: String,
+    },
+    BadgeClear {
+        key: String,
+        existed: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -248,6 +248,7 @@ impl HeadlessServer {
         let api_server = api::start_server_with_stop_control(
             api_tx,
             self.app.event_hub.clone(),
+            self.app.state.node_id.clone(),
             self.server_stop.clone(),
         )?;
 

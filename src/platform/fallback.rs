@@ -182,6 +182,21 @@ pub(crate) fn interactive_shell_command(_argv: &[String], _shell_name: &str) -> 
     None
 }
 
+/// Unsupported platform stub: no Unix scheduling priority, so no prefix.
+pub(crate) fn agent_nice_prefix(_nice: i32, _current_priority: Option<i32>) -> Vec<String> {
+    Vec::new()
+}
+
+/// Unsupported platform stub: no priority program is named.
+pub(crate) fn agent_nice_program() -> Option<&'static str> {
+    None
+}
+
+/// Unsupported platform stub: no Unix scheduling priority to report.
+pub fn process_nice(_pid: u32) -> Option<i32> {
+    None
+}
+
 /// Unsupported platform stub.
 pub(crate) fn scrollback_editor_argv(_path: &std::path::Path) -> std::io::Result<Vec<String>> {
     Err(std::io::Error::new(
@@ -245,6 +260,12 @@ pub fn process_exists(_pid: u32) -> bool {
     false
 }
 
+/// Unsupported platform stub. `herdr server stop` falls back to the
+/// "server is not running" error message on platforms without Unix sockets.
+pub fn find_unix_socket_owner_pid(_socket_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn write_clipboard(_bytes: &[u8]) -> bool {
     false
@@ -274,6 +295,10 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
 }
 
 /// Unsupported platform stub.
-pub fn show_desktop_notification(_title: &str, _body: Option<&str>) -> std::io::Result<bool> {
+pub fn show_desktop_notification(
+    _title: &str,
+    _body: Option<&str>,
+    _click_target: Option<&str>,
+) -> std::io::Result<bool> {
     Ok(false)
 }

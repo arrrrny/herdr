@@ -37,7 +37,9 @@ try {
                 $probe.SetKeyboardMode([string]$request.value)
                 Start-Sleep -Milliseconds 200
             }
-            if ($request.action -eq 'begin' -and -not $probe.ClearIfCount($closedCount)) { throw 'Unexpected input arrived between captures' }
+            # The geometry pass resizes the window between captures, and the oracle treats
+            # type 4/16 records as noise; only typed input arriving in the gap is fatal here.
+            if ($request.action -eq 'begin' -and -not $probe.ClearIfCount($closedCount) -and -not $probe.ClearIfNonKey($closedCount)) { throw 'Unexpected input arrived between captures' }
             if ($request.action -eq 'end') {
                 # Capture trailing duplicates/releases as well as the first expected bytes.
                 $deadline = [DateTime]::UtcNow.AddSeconds(3)

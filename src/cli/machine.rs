@@ -103,7 +103,48 @@ struct MachineStatusRow<'a> {
     id: &'a str,
     label: &'a str,
     status: &'static str,
+    /// Node identity the machine's server reports, when it reports one.
+    node_id: Option<String>,
     error: Option<String>,
+}
+
+/// A node identity claimed by more than one reachable saved machine.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct MachineNodeCollision {
+    node_id: String,
+    machines: Vec<String>,
+}
+
+/// Node identities claimed by more than one reachable saved machine.
+///
+/// A collision means two saved machines answer as the same node, so a consumer
+/// holding references from both cannot tell which one an entity came from.
+/// Machines that report no identity, and machines that could not be reached, do
+/// not claim one and are left out. `machine` is the name the operator knows the
+/// claimant by, which is the label they saved rather than the SSH target.
+fn node_collisions(claims: &[(String, Option<String>)]) -> Vec<MachineNodeCollision> {
+    let claims: Vec<crate::node::NodeClaim> = claims
+        .iter()
+        .filter_map(|(machine, node_id)| {
+            let node_id = node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|node_id| !node_id.is_empty())?;
+            crate::node::NodeId::parse(node_id)
+                .ok()
+                .map(|node_id| crate::node::NodeClaim {
+                    target: machine.clone(),
+                    node_id,
+                })
+        })
+        .collect();
+    crate::node::find_node_collisions(&claims)
+        .into_iter()
+        .map(|collision| MachineNodeCollision {
+            node_id: collision.node_id.as_str().to_owned(),
+            machines: collision.targets,
+        })
+        .collect()
 }
 
 fn status(args: &[String]) -> std::io::Result<i32> {
@@ -133,11 +174,11 @@ fn status(args: &[String]) -> std::io::Result<i32> {
     let rows = profiles
         .into_iter()
         .map(|profile| {
-            let (status, error) = if !profile.enabled {
-                ("disabled", None)
+            let (status, node_id, error) = if !profile.enabled {
+                ("disabled", None, None)
             } else {
                 match crate::remote::check_saved_ssh(&profile.target, &profile.session) {
-                    Ok(()) => ("reachable", None),
+                    Ok(node_id) => ("reachable", node_id, None),
                     Err(error) => {
                         let message = error.to_string();
                         let status = if crate::remote::ssh_error_requires_authentication(&message) {
@@ -145,7 +186,7 @@ fn status(args: &[String]) -> std::io::Result<i32> {
                         } else {
                             "error"
                         };
-                        (status, Some(message))
+                        (status, None, Some(message))
                     }
                 }
             };
@@ -153,27 +194,47 @@ fn status(args: &[String]) -> std::io::Result<i32> {
                 id: profile.id.as_str(),
                 label: &profile.label,
                 status,
+                node_id,
                 error,
             }
         })
         .collect::<Vec<_>>();
+    // The rows borrow the profile labels and node ids, so the collision pass
+    // reads them through owned copies while the rows are still alive.
+    let claims: Vec<(String, Option<String>)> = rows
+        .iter()
+        .map(|row| (row.label.to_owned(), row.node_id.clone()))
+        .collect();
+    let collisions = node_collisions(&claims);
+    let failed = rows.iter().any(|row| row.error.is_some());
     if json {
+        let report = serde_json::json!({ "machines": rows, "node_collisions": collisions });
         println!(
             "{}",
-            serde_json::to_string_pretty(&rows).map_err(std::io::Error::other)?
+            serde_json::to_string_pretty(&report).map_err(std::io::Error::other)?
         );
     } else {
         for row in &rows {
             println!("{}\t{}\t{}", row.id, row.label, row.status);
+            if let Some(node_id) = row.node_id.as_deref() {
+                println!("  node_id: {}", node_id.escape_debug());
+            }
             if let Some(error) = &row.error {
                 println!("  {}", error.escape_debug());
             }
+        }
+        for collision in &collisions {
+            eprintln!(
+                "node_id {} is claimed by several machines: {}",
+                collision.node_id.escape_debug(),
+                collision.machines.join(", ")
+            );
         }
         if rows.is_empty() {
             println!("No saved SSH machines.");
         }
     }
-    Ok(i32::from(rows.iter().any(|row| row.error.is_some())))
+    Ok(i32::from(failed || !collisions.is_empty()))
 }
 
 fn reconnect(args: &[String]) -> std::io::Result<i32> {
@@ -270,10 +331,14 @@ fn default_label(target: &str, session: &str) -> String {
     let host = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
-    let host = match (url, host.strip_prefix('[')) {
-        (Some(_), Some(bracketed)) => bracketed.split_once(']').map_or(host, |(ip, _)| ip),
-        (Some(_), None) => host.split_once(':').map_or(host, |(host, _)| host),
-        (None, _) => host,
+    // Both spellings carry the same host, so both must normalize the same way:
+    // `ssh://[::1]:2222` and the scp-style `[::1]:2222` are one machine, and
+    // `[::1]` must reduce to the bare address rather than keeping its brackets.
+    // Previously the bracket/port rules only applied to the `ssh://` spelling,
+    // so the two forms produced different labels for the same host.
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(ip, _)| ip),
+        None => host.split_once(':').map_or(host, |(host, _)| host),
     };
     if session == crate::session::DEFAULT_SESSION_NAME {
         host.to_owned()
@@ -638,8 +703,41 @@ mod tests {
             ("ssh://dev@[::1]:2222", "agents", "::1/agents"),
             ("ssh://dev@workbox/", "default", "workbox"),
             ("ssh://dev@workbox:2222/", "agents", "workbox/agents"),
+            // The scp-style spelling names the same hosts as the `ssh://`
+            // spelling, so it must derive the same label rather than keeping
+            // brackets and the port.
+            ("dev@workbox:2222", "default", "workbox"),
+            ("dev@workbox:2222", "agents", "workbox/agents"),
+            ("dev@[::1]:2222", "default", "::1"),
+            ("dev@[::1]:2222", "agents", "::1/agents"),
+            ("[::1]:2222", "default", "::1"),
+            // A bare IPv6 address with no port, in both spellings.
+            ("ssh://dev@[::1]", "default", "::1"),
+            ("dev@[::1]", "default", "::1"),
+            // A bare bracketed host with nothing after the bracket.
+            ("dev@[workbox]", "default", "workbox"),
         ] {
             assert_eq!(default_label(target, session), label, "{target} {session}");
+        }
+    }
+
+    #[test]
+    fn default_label_agrees_across_target_spellings() {
+        // Whatever the label rules are, the two spellings of one target must
+        // not drift apart, or the same machine ends up listed twice.
+        for (url, scp) in [
+            ("ssh://dev@workbox:2222", "dev@workbox:2222"),
+            ("ssh://dev@[::1]:2222", "dev@[::1]:2222"),
+            ("ssh://dev@[::1]", "dev@[::1]"),
+            ("ssh://dev@workbox", "dev@workbox"),
+        ] {
+            for session in [crate::session::DEFAULT_SESSION_NAME, "agents"] {
+                assert_eq!(
+                    default_label(url, session),
+                    default_label(scp, session),
+                    "{url} vs {scp} for session {session}"
+                );
+            }
         }
     }
 
@@ -686,6 +784,49 @@ mod tests {
         assert!(one_profile_id(&["build.example".into()], "usage")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn machine_rows_report_the_node_id_each_server_answered_with() {
+        let rows = vec![MachineStatusRow {
+            id: "0123456789abcdef0123456789abcdef",
+            label: "Build",
+            status: "reachable",
+            node_id: Some("i7".to_string()),
+            error: None,
+        }];
+        let encoded = serde_json::to_string(&rows).unwrap();
+        assert!(encoded.contains("\"node_id\":\"i7\""), "{encoded}");
+    }
+
+    #[test]
+    fn machines_claiming_the_same_node_id_are_reported_with_every_claimant() {
+        let claims = vec![
+            ("Build".to_string(), Some("i7".to_string())),
+            ("Spare".to_string(), Some("i7".to_string())),
+            ("lone".to_string(), Some("i9".to_string())),
+            // Unreachable and unconfigured machines claim no identity, so they
+            // are never named as colliders.
+            ("unreachable".to_string(), None),
+            ("unconfigured".to_string(), Some("local".to_string())),
+            ("other-unconfigured".to_string(), Some("local".to_string())),
+        ];
+        let collisions = node_collisions(&claims);
+
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        assert_eq!(collisions[0].node_id, "i7");
+        assert_eq!(collisions[0].machines, vec!["Build", "Spare"]);
+    }
+
+    #[test]
+    fn a_machine_without_a_usable_node_id_claims_nothing() {
+        for node_id in [None, Some(String::new()), Some("   ".to_string())] {
+            let claims = vec![
+                ("alpha".to_string(), node_id),
+                ("beta".to_string(), Some("i7".to_string())),
+            ];
+            assert!(node_collisions(&claims).is_empty(), "{claims:?}");
+        }
     }
 
     #[test]

@@ -205,6 +205,8 @@ mod tests {
             "plugin.pane.open",
             "plugin.pane.focus",
             "plugin.pane.close",
+            "badge.set",
+            "badge.clear",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

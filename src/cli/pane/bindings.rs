@@ -378,6 +378,29 @@ cli_projection! { pub(crate) PaneWaitProjection for PaneWaitForOutputParams {
     strip_ansi => Field::new(true).input(boolean("raw", false).help("Keep ANSI escape sequences while matching")),
 } }
 
+/// Fork-owned pane-idle wait primitive (`.specify/bugs/feature-agent-integration-independent-pane-busy`).
+/// Not an API request: `pane wait` polls `pane.process_info` until two
+/// consecutive idle samples, so a single sample cannot race a just-typed
+/// command.
+#[derive(Debug)]
+pub(super) struct PaneWaitIdleArgs {
+    pub(super) pane_id: String,
+    pub(super) idle: bool,
+    pub(super) timeout_ms: Option<u64>,
+}
+
+cli_projection! { pub(super) PaneWaitIdleProjection for PaneWaitIdleArgs {
+    pane_id => Field::new(String::new()).input(pane_id()),
+    idle => Field::new(false).input(
+        Input::flag("idle", |slot, _| {
+            *slot = true;
+            Ok(())
+        })
+        .configure(|arg| arg.required(true)),
+    ),
+    timeout_ms => Field::new(None).input(number("timeout", "MS").help("Give up after this many milliseconds")),
+} }
+
 cli_projection! { pub(crate) PaneTargetProjection for PaneTarget {
     pane_id => Field::new(String::new()).input(pane_id()),
 } }
@@ -677,6 +700,20 @@ pub(super) const LEAVES: &[Leaf] = &[
         PaneWaitProjection,
         PaneWaitForOutput
     ),
+    Leaf {
+        name: "wait",
+        about: "Wait until a pane is idle",
+        id: "cli:pane:wait",
+        output: Output::Quiet,
+        arguments: PaneWaitIdleProjection::arguments,
+        // `pane wait` polls locally and never sends this request; the entry
+        // exists so the subcommand is listed, completes, and parses.
+        method: |_| {
+            Ok(Method::PaneProcessInfo(
+                crate::api::schema::PaneProcessInfoParams { pane_id: None },
+            ))
+        },
+    },
     leaf!(
         "run",
         "Run a command in a pane",

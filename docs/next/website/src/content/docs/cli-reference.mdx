@@ -86,6 +86,35 @@ Requests and responses travel through the JSON API over non-interactive SSH; API
 
 Local pane IDs are not inherited by remote commands. Use explicit remote IDs; `--current` cannot refer to the caller's local pane. Remote worktree paths must be absolute, `~`, or start with `~/` (expanded on the server); plugin link paths must be absolute. The prefix targets one machine at a time; combined listings and routing through another TUI's connections are not included.
 
+## App
+
+```bash
+herdr app focus --pane <pane_id>
+herdr app focus --tab <tab_id>
+herdr app focus --workspace <workspace_id>
+herdr app focus --machine <label-or-id> --pane <pane_id>
+```
+
+`app focus` jumps a running Herdr app to a target the same way clicking that pane's notification does: exactly one of `--pane`, `--tab`, or `--workspace` names the target. With `--machine`, the app switches to that saved machine's pane and focuses the target there. Without it, the command focuses the local target through the local server.
+
+The command prints which path it took: `focused (app)` when a running app accepted the jump, `focused (server-side)` when no running app accepted it and the saved machine's server focused the target instead, and `focused (local)` for the local path. `--machine` requires an enabled saved profile ID or a unique label, and an unknown machine or a target ID that does not exist on it fails with a non-zero exit.
+
+## Badges
+
+```bash
+herdr badge set --key KEY --text TEXT --color COLOR
+herdr badge clear --key KEY
+herdr badge list
+```
+
+`herdr badge` surfaces the in-binary custom badge system as a CLI verb. Badges are app-global: each is keyed, so setting the same key replaces the previous badge and multiple distinct keys stack. They render in the sidebar header.
+
+- `herdr badge set --key KEY --text TEXT --color COLOR` sets or replaces the badge for `KEY`. `--text` is the label shown in the sidebar; `--color` is any Herdr color string (hex, `rgb(...)`, a named color, or `reset`).
+- `herdr badge clear --key KEY` removes the badge for `KEY`. Clearing a missing key is a no-op that still succeeds.
+- `herdr badge list` prints the in-memory (IPC-set) badges as JSON. File-sourced badges from `run/badge.json` are not included; they are read fresh on every render.
+
+Each command prints the raw JSON response from the socket API (the same `badge.set`, `badge.clear`, and `badge.list` methods integrations use).
+
 ## Shell completions
 
 ```bash
@@ -347,7 +376,7 @@ herdr agent rename <target> <name>|--clear
 herdr agent focus <target>
 herdr agent wait <target> [--until STATUS]... [--timeout MS]
 herdr agent attach <target> [--takeover]
-herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]
+herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--nice N] [-- <agent-args...>]
 herdr agent explain <target> [--json|--verbose]
 herdr agent explain --file PATH --agent LABEL [--json|--verbose]
 ```
@@ -357,6 +386,8 @@ Agent targets are either a unique live agent name or the pane ID that currently 
 `agent start` activates an existing available shell pane: the pane's interactive shell must own the foreground, with no foreground command, editor, or agent running. Topology must be created separately. Names are unique among live agents and must match `[a-z][a-z0-9_-]{0,31}`. The kind selects Herdr's canonical interactive executable, while arguments after `--` are passed to that executable. Supported kinds are `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, and `muse`. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Temporary detection uncertainty does not clear it.
 
 A successful start returns only after the expected agent owns the same terminal and is ready for interactive input. If detection reports `blocked` during startup, the command returns `agent_not_ready` immediately. The name remains available for `agent read` and `agent send-keys`, and becomes ready for prompts after detection reports `idle`. The default startup timeout is 30000 milliseconds; explicit values must be greater than 3000 and no more than 300000.
+
+`--nice N` sets the CPU scheduling priority of the started agent, from -20 (most aggressive) to 19 (most deferred). The priority becomes part of the launch line, so the agent inherits it before it forks any child and every descendant keeps it. The agent ends up at exactly the requested priority: on macOS, whose `nice` adjusts the caller's priority instead of setting it, Herdr compensates for the priority the pane's shell already runs at. A value outside the supported range is rejected before any agent starts, and 0 leaves the launch line unchanged. `--nice` overrides the `[agent.start] nice` configuration default, and an explicit `--nice 0` overrides it as well. Negative values need elevated privileges, and the priority is ignored on platforms without a Unix scheduling priority. `pane process-info` reports the priority the operating system applied. If the `nice` program is not on the search path, the launch fails with `agent_nice_unavailable` before any agent starts.
 
 `agent prompt` honors live bracketed-paste mode and writes text followed by delayed Enter as one ordered submission, including while the agent is working. Success without `--wait` acknowledges the writes, not the start of a turn. On Windows, Codex receives a paste boundary before Enter so submission does not depend on prompt size; the caller timeout includes submission time. If the agent is already `blocked`, it returns `agent_blocked` without sending input. With `--wait`, a prompt sent from another non-working state has up to five seconds after submission to produce an observed `working` or `blocked` state or Herdr returns `agent_prompt_stalled`; if the caller timeout expires first, Herdr returns the normal `timeout` error. This prevents unrelated `idle`, `done`, or session changes from completing the wait. After activity is observed, it waits for the first requested settled status. It does not track individual turns. If the agent is already working, completion of that active turn may satisfy the wait. `--until` narrows the matching states and is rejected unless `--wait` is also present. Standalone `agent wait` returns immediately when the current status matches. Both default to `idle`, `done`, or `blocked`; use `--until unknown` explicitly when needed.
 

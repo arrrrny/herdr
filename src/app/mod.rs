@@ -505,6 +505,7 @@ impl App {
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None, None);
 
         let mut state = AppState {
+            badges: crate::badges::BadgeStore::new(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -541,6 +542,7 @@ impl App {
             pending_agent_notifications: std::collections::HashMap::new(),
             outer_terminal_focus: None,
             prefix_keys,
+            node_id: config.node_id(),
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
@@ -561,6 +563,7 @@ impl App {
             cjk_ime_cursor_shape: config.experimental.cjk_ime_cursor_shape.to_decscusr(),
             kitty_graphics_enabled: config.kitty_graphics_enabled(),
             default_shell: config.terminal.default_shell.clone(),
+            agent_start_nice: config.agent_start_nice(),
             shell_mode: config.terminal.shell_mode,
             new_terminal_cwd: config.terminal.new_cwd.clone(),
             pane_scrollback_limit_bytes: config.advanced.scrollback_limit_bytes,
@@ -976,6 +979,20 @@ impl App {
         }
 
         if !invalid_section("server") {
+            // A configured identity is reported once, where the operator sees
+            // it. The value itself only changes with a restart, like the rest
+            // of `[server]`: an entity's `node_id` and the `ping` capabilities
+            // both have to name one node, and the capabilities are built once
+            // at server start.
+            if let Some(diagnostic) = config.invalid_node_id_diagnostic() {
+                diagnostics.push(format!("{diagnostic}; keeping current [server] settings"));
+            } else if config.node_id() != self.state.node_id {
+                diagnostics.push(format!(
+                    "server.node_id {:?} requires a server restart; keeping {:?}",
+                    config.server.node_id,
+                    self.state.node_id.as_str()
+                ));
+            }
             if let Some(diagnostic) = config.invalid_headless_size_diagnostic() {
                 diagnostics.push(format!("{diagnostic}; keeping current [server] settings"));
             } else {
@@ -1022,6 +1039,10 @@ impl App {
             self.state.default_shell = config.terminal.default_shell.clone();
             self.state.shell_mode = config.terminal.shell_mode;
             self.state.new_terminal_cwd = config.terminal.new_cwd.clone();
+        }
+
+        if !invalid_section("agent") {
+            self.state.agent_start_nice = config.agent_start_nice();
         }
 
         if !invalid_section("worktrees") {
@@ -1823,6 +1844,80 @@ mod tests {
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
         assert_eq!(toast.title, "reloaded config");
         assert_eq!(toast.context, "using config.toml");
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_keeps_the_node_id_until_restart() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-node-id");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[server]\nnode_id = \"i7\"\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        // Start the way a server does: the identity comes from the loaded
+        // config, the entities read it from the state and the `ping`
+        // capabilities were built once at startup from it.
+        app.state.node_id = crate::config::Config::load().config.node_id();
+        let started = app.state.node_id.clone();
+        assert_eq!(started.as_str(), "i7");
+
+        // A live reload that changes the identity must not move it: the server
+        // keeps answering the id it started with, and the operator is told the
+        // new value needs a restart rather than silently getting a second one.
+        std::fs::write(&path, "[server]\nnode_id = \"i9\"\n").unwrap();
+        let report = app.reload_config();
+
+        // The restart request is a diagnostic, so the reload is partial rather
+        // than applied — the same shape as a config the running server cannot
+        // take on.
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(app.state.node_id, started);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("server.node_id")
+                    && diagnostic.contains("restart")),
+            "expected a restart diagnostic, got {:?}",
+            report.diagnostics
+        );
+
+        // A restart is what actually applies it: the same config through the
+        // startup path resolves the configured identity.
+        let restarted = crate::config::Config::load().config.node_id();
+        assert_eq!(restarted.as_str(), "i9");
+
+        std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_reports_an_unusable_node_id_and_keeps_the_current_one() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-config-node-id-invalid");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "[server]\nnode_id = \"two words\"\n").unwrap();
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        app.state.node_id = crate::node::NodeId::parse("i7").unwrap();
+        let started = app.state.node_id.clone();
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(app.state.node_id, started);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("server.node_id")),
+            "expected a node id diagnostic, got {:?}",
+            report.diagnostics
+        );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -2991,6 +3086,7 @@ mod tests {
                 pane_id,
                 args: Vec::new(),
                 timeout_ms: Some(1_000),
+                nice: None,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -3033,6 +3129,7 @@ mod tests {
                 pane_id: pane_id.clone(),
                 args: vec!["resume".into(), "codex-session".into()],
                 timeout_ms: Some(4_000),
+                nice: None,
             }),
         };
         let response = app.handle_api_request(request());

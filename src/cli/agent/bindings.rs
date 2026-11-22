@@ -60,6 +60,22 @@ fn validate_timeout(value: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())
 }
 
+/// The CPU scheduling priority requested for a freshly started agent.
+///
+/// The value is rejected locally when it is outside the supported range, so
+/// an invalid request never reaches the server and never starts an agent.
+pub(crate) fn nice() -> Input<Option<i32>> {
+    Input::value("nice", "N", |slot, value| {
+        *slot = Some(crate::agent_priority::parse(value)?);
+        Ok(())
+    })
+    .configure(|arg| arg.value_parser(clap::builder::ValueParser::new(validate_nice)))
+}
+
+fn validate_nice(value: &str) -> Result<String, String> {
+    crate::agent_priority::parse(value).map(|_| value.to_owned())
+}
+
 pub(crate) fn source() -> Input<ReadSource> {
     Input::value("source", "SOURCE", |slot, value| {
         *slot = parse_choice(READ_SOURCES, "read source", value)?;
@@ -265,7 +281,7 @@ pub(crate) fn command() -> Command {
             .after_help("If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match."))
         .subcommand(leaf("start", AgentStartProjection::arguments(), "Start a supported interactive agent in an existing pane")
             .override_usage("herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]")
-            .after_help("The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\nnext: herdr agent prompt <TARGET> <TEXT> --wait"))
+            .after_help("The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\n--nice sets the CPU scheduling priority of the agent and every child it forks, from -20 (most aggressive) to 19 (most deferred). It overrides the [agent.start] nice configuration default. Negative values need elevated privileges.\n\nnext: herdr agent prompt <TARGET> <TEXT> --wait"))
         .subcommand(leaf("attach", AttachProjection::arguments(), "Attach directly to an agent terminal")
             .override_usage("herdr agent attach <TARGET> [OPTIONS]"))
         .subcommand(leaf("explain", ExplainProjection::arguments(), "Explain agent detection state")

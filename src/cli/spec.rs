@@ -40,9 +40,11 @@ pub(super) fn command() -> Command {
         .subcommand(workspace_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
+        .subcommand(app_command())
         .subcommand(notification_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
+        .subcommand(badge_command())
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
@@ -208,6 +210,19 @@ fn tab_command() -> Command {
     super::tab::command()
 }
 
+fn app_command() -> Command {
+    Command::new("app")
+        .about("Jump a running app to a target")
+        .subcommand(
+            Command::new("focus")
+                .about("Focus a pane, tab, or workspace in the running app")
+                .arg(option("machine", "LABEL-OR-ID"))
+                .arg(option("pane", "PANE_ID"))
+                .arg(option("tab", "TAB_ID"))
+                .arg(option("workspace", "WORKSPACE_ID")),
+        )
+}
+
 fn notification_command() -> Command {
     super::notification::command()
 }
@@ -218,6 +233,34 @@ fn agent_command() -> Command {
 
 fn pane_command() -> Command {
     super::pane::command()
+}
+
+fn badge_command() -> Command {
+    Command::new("badge")
+        .about("Manage custom badges shown in the sidebar header")
+        .subcommand(
+            Command::new("set")
+                .about("Set or replace a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true))
+                .arg(
+                    Arg::new("text")
+                        .long("text")
+                        .value_name("TEXT")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("color")
+                        .long("color")
+                        .value_name("COLOR")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("clear")
+                .about("Remove a badge by key")
+                .arg(Arg::new("key").long("key").value_name("KEY").required(true)),
+        )
+        .subcommand(Command::new("list").about("List in-memory (IPC-set) badges"))
 }
 
 fn terminal_command() -> Command {
@@ -631,6 +674,9 @@ mod tests {
         assert!(pane
             .get_subcommands()
             .any(|subcommand| subcommand.get_name() == "wait-output"));
+        assert!(pane
+            .get_subcommands()
+            .any(|subcommand| subcommand.get_name() == "wait"));
     }
 
     #[test]

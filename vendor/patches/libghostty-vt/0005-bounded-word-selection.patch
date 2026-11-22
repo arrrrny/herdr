@@ -1,17 +1,33 @@
 diff --git a/vendor/libghostty-vt/include/ghostty/vt/selection.h b/vendor/libghostty-vt/include/ghostty/vt/selection.h
-index 0158965e..3e557ef0 100644
+index 0158965e..a9dc5549 100644
 --- a/vendor/libghostty-vt/include/ghostty/vt/selection.h
 +++ b/vendor/libghostty-vt/include/ghostty/vt/selection.h
-@@ -769,6 +769,21 @@ GHOSTTY_API GhosttyResult ghostty_terminal_select_word(
+@@ -769,6 +769,37 @@ GHOSTTY_API GhosttyResult ghostty_terminal_select_word(
                                      const GhosttyTerminalSelectWordOptions* options,
                                      GhosttySelection* out_selection);
  
 +/**
 + * Derive a word selection with a shared forward/backward cell inspection limit.
 + *
-+ * Like ghostty_terminal_select_word(), but returns GHOSTTY_NO_VALUE if
-+ * max_cells is zero or the search exhausts that budget. No partial selection
-+ * is returned. The existing options structure and unbounded API are unchanged.
++ * The returned selection is not installed as the terminal's current
++ * selection. It is a snapshot with the same lifetime rules as GhosttySelection.
++ *
++ * Like ghostty_terminal_select_word(), with one difference and one addition.
++ * Unlike that function, wide-character spacer cells are folded into the word.
++ * On top of that, max_cells counts the options->ref cell itself and at most
++ * max_cells cells are inspected across both directions, so a budget of 1
++ * always yields GHOSTTY_NO_VALUE and a budget of exactly the word's cell count
++ * is required. The search never returns a partial selection: exhausting the
++ * budget yields GHOSTTY_NO_VALUE.
++ *
++ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
++ * @param options Word-selection options
++ * @param max_cells Shared forward/backward cell inspection limit
++ * @param[out] out_selection On success, receives the derived selection
++ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if the valid ref has
++ *         no selectable word content or the cell budget is exhausted, or
++ *         GHOSTTY_INVALID_VALUE if the terminal, options, ref, codepoint
++ *         pointer, or output pointer are invalid.
 + *
 + * @ingroup selection
 + */
@@ -37,10 +53,10 @@ index a0227aef..48536568 100644
              @export(&c.terminal_select_line, .{ .name = "ghostty_terminal_select_line" });
              @export(&c.terminal_select_all, .{ .name = "ghostty_terminal_select_all" });
 diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
-index 208e276a..d0d2b929 100644
+index 208e276a..28ccdd63 100644
 --- a/vendor/libghostty-vt/src/terminal/Screen.zig
 +++ b/vendor/libghostty-vt/src/terminal/Screen.zig
-@@ -3350,6 +3350,111 @@ pub fn selectWord(
+@@ -3350,6 +3350,120 @@ pub fn selectWord(
      return .init(start, end, false);
  }
  
@@ -78,8 +94,12 @@ index 208e276a..d0d2b929 100644
 +            const rac = p.rowAndCell();
 +            const cell = rac.cell;
 +
-+            // Wide-cell spacers are part of the same displayed word.
-+            if (cell.wide == .spacer_tail or cell.wide == .spacer_head) {
++            // Wide-cell spacers are part of the same displayed word. Going
++            // right a spacer head is reached before its head on the next
++            // wrapped row, so only a tail can be accepted without checking
++            // the cell it belongs to first.
++            if (cell.wide == .spacer_head) continue;
++            if (cell.wide == .spacer_tail) {
 +                prev = p;
 +                if (p.x == p.node.cols() - 1 and !rac.row.wrap) break :end p;
 +                continue;
@@ -124,7 +144,12 @@ index 208e276a..d0d2b929 100644
 +                break :start prev;
 +            }
 +
-+            if (cell.wide == .spacer_tail or cell.wide == .spacer_head) {
++            // Wide-cell spacers are part of the same displayed word. Going
++            // left a spacer tail is reached before its head, so it cannot be
++            // accepted until that head is validated; a spacer head's head was
++            // already visited.
++            if (cell.wide == .spacer_tail) continue;
++            if (cell.wide == .spacer_head) {
 +                prev = p;
 +                continue;
 +            }

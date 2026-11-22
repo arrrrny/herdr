@@ -212,3 +212,79 @@ fn agent_projection_clap_relations_and_help_before_transport() {
         );
     }
 }
+
+#[test]
+fn agent_start_parses_a_requested_priority() {
+    assert_eq!(
+        params(&["start", "name", "--kind", "codex", "--pane", "1", "--nice", "19"]),
+        serde_json::json!({"name":"name", "kind":"codex", "pane_id":"1", "nice":19})
+    );
+    assert_eq!(
+        params(&[
+            "start",
+            "name",
+            "--kind",
+            "codex",
+            "--pane",
+            "1",
+            "--nice=-20"
+        ]),
+        serde_json::json!({"name":"name", "kind":"codex", "pane_id":"1", "nice":-20})
+    );
+}
+
+#[test]
+fn agent_start_sends_no_priority_when_the_flag_is_absent() {
+    let params = params(&["start", "name", "--kind", "codex", "--pane", "1"]);
+    assert!(params.get("nice").is_none(), "{params}");
+}
+
+#[test]
+fn agent_start_rejects_an_out_of_range_priority_before_any_request() {
+    for value in ["20", "-21"] {
+        let Err(error) = parse(&[
+            "start", "name", "--kind", "codex", "--pane", "1", "--nice", value,
+        ]) else {
+            panic!("expected a rejection");
+        };
+        let ParseError::Clap(error) = error else {
+            panic!("expected a clap error");
+        };
+        assert_eq!(error.exit_code(), 2);
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains(value),
+            "message must name the value: {rendered}"
+        );
+        assert!(
+            rendered.contains("-20..=19"),
+            "message must name the range: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn agent_start_keeps_trailing_agent_arguments_with_a_priority() {
+    assert_eq!(
+        params(&[
+            "start",
+            "name",
+            "--kind",
+            "codex",
+            "--pane",
+            "1",
+            "--nice",
+            "19",
+            "--",
+            "--auto",
+            "two words"
+        ]),
+        serde_json::json!({
+            "name":"name",
+            "kind":"codex",
+            "pane_id":"1",
+            "nice":19,
+            "args":["--auto","two words"]
+        })
+    );
+}

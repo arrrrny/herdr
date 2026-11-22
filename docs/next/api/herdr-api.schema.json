@@ -805,6 +805,11 @@
                 "null"
               ]
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this pane was read from.",
+              "type": "string"
+            },
             "pane_id": {
               "type": "string"
             },
@@ -1046,6 +1051,11 @@
             "label": {
               "type": "string"
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this tab was read from.",
+              "type": "string"
+            },
             "number": {
               "format": "uint",
               "minimum": 0,
@@ -1086,6 +1096,11 @@
               "type": "boolean"
             },
             "label": {
+              "type": "string"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this workspace was read from.",
               "type": "string"
             },
             "number": {
@@ -1351,6 +1366,14 @@
             },
             "name": {
               "type": "string"
+            },
+            "nice": {
+              "description": "CPU scheduling priority for the started agent, from -20 to 19.\nThe agent and every child it forks inherit it. Absent means the\nconfigured `[agent.start] nice` default applies.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "pane_id": {
               "type": "string"
@@ -1694,6 +1717,111 @@
             "target"
           ],
           "type": "object"
+        },
+        "BadgeClearParams": {
+          "description": "`badge.clear` — remove a single badge by key. No-op if the key is not\npresent (returns success either way).",
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key"
+          ],
+          "type": "object"
+        },
+        "BadgeSetParams": {
+          "description": "`badge.set` — set or replace a badge by key. Setting the same key again\nreplaces the previous badge. Multiple distinct keys stack.",
+          "properties": {
+            "color": {
+              "description": "Any color string accepted by herdr's color parser: hex (`#rrggbb`,\n`#rgb`), `rgb(r,g,b)`, named colors, or `reset`/`default`/`none`.",
+              "type": "string"
+            },
+            "key": {
+              "description": "Stable identifier for this badge. Replaces any existing badge with\nthe same key. Non-empty.",
+              "type": "string"
+            },
+            "text": {
+              "description": "Arbitrary text to render. Truncated for display if too long.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "text",
+            "color"
+          ],
+          "type": "object"
+        },
+        "ClientActivateEndpointParams": {
+          "description": "Asks a running client shell to switch to a saved machine and focus a target there.",
+          "properties": {
+            "machine": {
+              "description": "Saved machine label or profile ID.",
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/schemas/request/$defs/ClientActivateEndpointTarget"
+            }
+          },
+          "required": [
+            "machine",
+            "target"
+          ],
+          "type": "object"
+        },
+        "ClientActivateEndpointTarget": {
+          "description": "Focus target inside the machine a client shell is asked to activate.",
+          "oneOf": [
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "workspace",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "tab",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "pane",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ],
+              "type": "object"
+            }
+          ]
         },
         "ClientShellSurfaceSetParams": {
           "description": "Updates whether the requesting client shell receives and controls pane presentation.",
@@ -4257,6 +4385,54 @@
               "type": "object"
             },
             {
+              "description": "Live pane output: one snapshot followed by coalesced incremental chunks.",
+              "properties": {
+                "format": {
+                  "$ref": "#/schemas/request/$defs/ReadFormat",
+                  "default": "ansi"
+                },
+                "lines": {
+                  "description": "Lines per chunk and the size of the initial snapshot.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "since_sequence": {
+                  "description": "Last stream sequence the client applied; asks for a replay.",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "$ref": "#/schemas/request/$defs/ReadSource",
+                  "default": "recent"
+                },
+                "strip_ansi": {
+                  "default": false,
+                  "description": "Kept `false` so chunks carry their ANSI by default.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "pane.output_stream",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "type": {
                   "const": "layout.updated",
@@ -4881,6 +5057,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "client.activate_endpoint",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ClientActivateEndpointParams"
             }
           },
           "required": [
@@ -6312,6 +6504,54 @@
             "params"
           ],
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/BadgeSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/BadgeClearParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "badge.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -6398,6 +6638,60 @@
             "read"
           ],
           "type": "object"
+        },
+        "PaneOutputStreamEvent": {
+          "properties": {
+            "pane_id": {
+              "type": "string"
+            },
+            "phase": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneOutputStreamPhase"
+            },
+            "sequence": {
+              "description": "Monotonic per-pane sequence, so a reconnecting client can ask for a replay.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "description": "Whether `text` is a window the line cap clipped short of the pane's whole\nhistory. Set on `snapshot` and `resync`, where `text` is a full read; a\n`delta` is complete relative to what the client already holds, so it\nalways reports `false` and the flag is read together with `phase`.",
+              "type": "boolean"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "workspace_id",
+            "sequence",
+            "phase",
+            "text"
+          ],
+          "type": "object"
+        },
+        "PaneOutputStreamPhase": {
+          "description": "Where a stream event sits in the pane's output history.",
+          "oneOf": [
+            {
+              "const": "snapshot",
+              "description": "A full pane read: the client replaces its buffer with `text`.",
+              "type": "string"
+            },
+            {
+              "const": "delta",
+              "description": "Only the output produced since the previous stream event.",
+              "type": "string"
+            },
+            {
+              "const": "resync",
+              "description": "Retained history was lost; `text` is a fresh full read to resync to.",
+              "type": "string"
+            }
+          ]
         },
         "PaneReadResult": {
           "properties": {
@@ -6510,6 +6804,9 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/PaneScrollChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/PaneOutputStreamEvent"
             }
           ]
         },
@@ -6517,7 +6814,8 @@
           "enum": [
             "pane.output_matched",
             "pane.agent_status_changed",
-            "pane.scroll_changed"
+            "pane.scroll_changed",
+            "pane.output_stream"
           ],
           "type": "string"
         }
@@ -6602,6 +6900,11 @@
                 "string",
                 "null"
               ]
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this agent was read from.",
+              "type": "string"
             },
             "pane_id": {
               "type": "string"
@@ -6775,6 +7078,26 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "BadgeInfo": {
+          "description": "`badge.list` — return all currently-set in-memory (IPC-set) badges.\nFile-sourced badges from `run/badge.json` are NOT included here; they\nare read fresh on every render and merged with these at display time.",
+          "properties": {
+            "color": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key",
+            "text",
+            "color"
+          ],
+          "type": "object"
         },
         "ClientWindowTitleReason": {
           "enum": [
@@ -7913,6 +8236,11 @@
                 "null"
               ]
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this pane was read from.",
+              "type": "string"
+            },
             "pane_id": {
               "type": "string"
             },
@@ -8261,6 +8589,11 @@
         },
         "PaneProcessInfo": {
           "properties": {
+            "busy": {
+              "default": false,
+              "description": "Agent-integration-independent busy signal: a foreground process other than\nthe interactive shell is present on the pane's pty. `false` means only the\nshell is running (idle).",
+              "type": "boolean"
+            },
             "foreground_process_group_id": {
               "format": "uint32",
               "minimum": 0,
@@ -8329,6 +8662,14 @@
             },
             "name": {
               "type": "string"
+            },
+            "nice": {
+              "description": "CPU scheduling priority the operating system applied to the process.\nAbsent when the operating system cannot report one.",
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "pid": {
               "format": "uint32",
@@ -10011,6 +10352,23 @@
             },
             {
               "properties": {
+                "delivered": {
+                  "description": "Whether a running client shell that understands the request received it.",
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "client_activate_endpoint",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "delivered"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "integrations": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/IntegrationInfo"
@@ -10415,6 +10773,69 @@
                 "type"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "badges": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/BadgeInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "badge_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "badges"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "color": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "badge_set",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "key",
+                "text",
+                "color"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "existed": {
+                  "type": "boolean"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "badge_clear",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "key",
+                "existed"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -10440,6 +10861,11 @@
             },
             "live_handoff": {
               "type": "boolean"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this server answers for. Every entity it reports\ncarries the same value, so a consumer holding references from several\nservers can tell which node each one belongs to.",
+              "type": "string"
             },
             "ssh_agent_registration": {
               "default": false,
@@ -10488,6 +10914,11 @@
                 "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
               },
               "type": "array"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this snapshot was read from. Blank only for a\nserver built before node identity existed.",
+              "type": "string"
             },
             "panes": {
               "items": {
@@ -10545,6 +10976,11 @@
             "label": {
               "type": "string"
             },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this tab was read from.",
+              "type": "string"
+            },
             "number": {
               "format": "uint",
               "minimum": 0,
@@ -10585,6 +11021,11 @@
               "type": "boolean"
             },
             "label": {
+              "type": "string"
+            },
+            "node_id": {
+              "default": "",
+              "description": "Identity of the node this workspace was read from.",
               "type": "string"
             },
             "number": {

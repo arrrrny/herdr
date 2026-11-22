@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod agents;
+pub mod badges;
 pub mod commands;
 pub mod common;
 pub mod events;
@@ -16,6 +17,7 @@ pub mod workspaces;
 pub mod worktrees;
 
 pub use agents::*;
+pub use badges::*;
 pub use commands::*;
 pub use common::*;
 pub use events::*;
@@ -56,6 +58,7 @@ operations::define_operations! {
     CommandInvoke(CommandInvokeParams) => "command.invoke", true, true;
     ClientWindowTitleSet(ClientWindowTitleSetParams) => "client.window_title.set", false, false;
     ClientWindowTitleClear(EmptyParams) => "client.window_title.clear", false, false;
+    ClientActivateEndpoint(ClientActivateEndpointParams) => "client.activate_endpoint", false, false;
     ClientShellSurfaceSet(ClientShellSurfaceSetParams) => "client_shell.surface.set", false, true;
     SessionSnapshot(EmptyParams) => "session.snapshot", false, false;
     WorkspaceCreate(WorkspaceCreateParams) => "workspace.create", true, true;
@@ -145,6 +148,9 @@ operations::define_operations! {
     PluginPaneOpen(PluginPaneOpenParams) => "plugin.pane.open", true, false;
     PluginPaneFocus(PluginPaneFocusParams) => "plugin.pane.focus", true, false;
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false;
+    BadgeSet(BadgeSetParams) => "badge.set", true, false;
+    BadgeClear(BadgeClearParams) => "badge.clear", true, false;
+    BadgeList(EmptyParams) => "badge.list", false, false;
 }
 
 #[cfg(test)]

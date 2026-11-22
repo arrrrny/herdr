@@ -21,10 +21,13 @@ macro_rules! println {
 
 pub(crate) mod agent;
 mod api;
+mod app;
+mod badge;
 mod completion;
 mod integration;
 mod machine;
 pub(crate) mod notification;
+mod notification_click;
 pub(crate) mod pane;
 pub(crate) mod plugin;
 pub(crate) mod projection;
@@ -96,6 +99,17 @@ pub(crate) fn maybe_run_machine(args: &[String]) -> Option<std::io::Result<Comma
 }
 
 pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
+    // Hidden: terminal-notifier's `-execute file://<herdr>` launches a fresh
+    // herdr binary with no args and no TTY on stdin when the user clicks a
+    // macOS system notification's "Show" action. Detect this via the marker
+    // file written by `src/platform/macos.rs::show_desktop_notification`
+    // and dispatch a `pane.focus` API request to the running TUI before any
+    // TUI/CLI dispatch runs. See `cli::notification_click` and
+    // arrrrny/herdr#27.
+    if let Some(code) = notification_click::handle_if_click_launch()? {
+        return Ok(CommandOutcome::Handled(code));
+    }
+
     let Some(command) = args.get(1).map(|arg| arg.as_str()) else {
         return Ok(CommandOutcome::NotCli);
     };
@@ -119,6 +133,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
             exit_code
         }
         "api" => api::run_api_command(&args[2..])?,
+        "app" => app::run_app_command(&args[2..])?,
         "status" => status::run_status_command(&args[2..])?,
         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
         "config" => run_config_command(&args[2..])?,
@@ -131,6 +146,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "agent" => agent::run_agent_command(&args[2..])?,
         "terminal" => run_terminal_command(&args[2..])?,
         "pane" => pane::run_pane_command(&args[2..])?,
+        "badge" => badge::run_badge_command(&args[2..])?,
         "plugin" => plugin::run_plugin_command(&args[2..])?,
         "integration" => integration::run_integration_command(&args[2..])?,
         "session" => run_session_command(&args[2..])?,

@@ -1,10 +1,14 @@
 pub(crate) mod bindings;
 
+use std::time::{Duration, Instant};
+
 use clap::ArgMatches;
 
 use super::projection::ParseError;
 use crate::api::schema::panes::{PaneMetadataProjection, PaneMoveProjection, PaneSwapProjection};
-use crate::api::schema::{Method, PaneDirection, PaneMoveDestination};
+use crate::api::schema::{
+    Method, PaneDirection, PaneMoveDestination, PaneProcessInfoParams, Request,
+};
 
 pub(crate) fn command() -> clap::Command {
     bindings::command()
@@ -27,6 +31,9 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         }
         return Ok(2);
     };
+    if name == "wait" {
+        return pane_wait_idle(&args[1..]);
+    }
     let request = match leaf.request(&args[1..]) {
         Ok(request) => request,
         Err(ParseError::Io(error)) => return Err(error),
@@ -50,6 +57,70 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
                 Ok(0)
             }
         }
+    }
+}
+
+/// Fork-owned `herdr pane wait <PANE_ID> --idle [--timeout MS]`
+/// (`.specify/bugs/feature-agent-integration-independent-pane-busy`). Polls
+/// `pane.process_info` until two consecutive idle samples, so a single sample
+/// cannot race a just-typed command. A busy sample resets the streak.
+fn pane_wait_idle(args: &[String]) -> std::io::Result<i32> {
+    let params = match super::projection::parse(
+        super::projection::command("wait", bindings::PaneWaitIdleProjection::arguments())
+            .about("Wait until a pane is idle"),
+        args,
+        bindings::PaneWaitIdleProjection::from_matches,
+    ) {
+        Ok(params) => params,
+        Err(ParseError::Io(error)) => return Err(error),
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
+    };
+    if !params.idle {
+        eprintln!("usage: herdr pane wait <pane_id> --idle [--timeout MS]");
+        return Ok(2);
+    }
+    let deadline = params
+        .timeout_ms
+        .map(|ms| Instant::now() + Duration::from_millis(ms));
+    let mut idle_streak: u32 = 0;
+    loop {
+        if let Some(deadline) = deadline {
+            if Instant::now() >= deadline {
+                eprintln!("pane wait --idle timed out");
+                return Ok(1);
+            }
+        }
+        let response = super::send_request(&Request {
+            id: "cli:pane:wait".into(),
+            method: Method::PaneProcessInfo(PaneProcessInfoParams {
+                pane_id: Some(params.pane_id.clone()),
+            }),
+        })?;
+        if response.get("error").is_some() {
+            eprintln!("{response}");
+            return Ok(1);
+        }
+        let busy = response["result"]["process_info"]["busy"]
+            .as_bool()
+            .unwrap_or(false);
+        idle_streak = idle_streak_after_sample(!busy, idle_streak);
+        if idle_streak >= 2 {
+            return Ok(0);
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// Returns the new consecutive-idle-sample count. A busy sample resets to 0.
+fn idle_streak_after_sample(was_idle: bool, previous: u32) -> u32 {
+    if was_idle {
+        previous + 1
+    } else {
+        0
     }
 }
 
@@ -374,6 +445,13 @@ mod tests {
                 "cli:pane:wait-output",
                 "pane.wait_for_output",
                 json!({"pane_id": "pane", "source": "recent", "match": {"type": "substring", "value": ""}, "strip_ansi": true}),
+            ),
+            (
+                "wait",
+                vec!["pane", "--idle"],
+                "cli:pane:wait",
+                "pane.process_info",
+                json!({}),
             ),
             (
                 "run",
@@ -1025,5 +1103,72 @@ mod tests {
         ] {
             assert_eq!(run_pane_command(&args(&[name])).unwrap(), 2);
         }
+    }
+
+    #[test]
+    fn pane_wait_projection_requires_a_pane_id_and_idle() {
+        let command =
+            crate::cli::projection::command("wait", bindings::PaneWaitIdleProjection::arguments())
+                .about("Wait until a pane is idle");
+        assert!(command
+            .clone()
+            .no_binary_name(true)
+            .try_get_matches_from(["p1"])
+            .is_err());
+        assert!(command
+            .clone()
+            .no_binary_name(true)
+            .try_get_matches_from(["--idle"])
+            .is_err());
+        let matches = command
+            .no_binary_name(true)
+            .try_get_matches_from(["p1", "--idle", "--timeout", "250"])
+            .unwrap();
+        let params = bindings::PaneWaitIdleProjection::from_matches(&matches).unwrap();
+        assert_eq!(params.pane_id, "p1");
+        assert!(params.idle);
+        assert_eq!(params.timeout_ms, Some(250));
+    }
+
+    #[test]
+    fn idle_streak_counts_consecutive_idle_samples_and_resets_on_busy() {
+        assert_eq!(super::idle_streak_after_sample(true, 0), 1);
+        assert_eq!(super::idle_streak_after_sample(true, 1), 2);
+        assert_eq!(super::idle_streak_after_sample(false, 4), 0);
+    }
+
+    #[test]
+    fn a_literal_double_dash_flag_value_is_not_the_separator() {
+        // Regression: taking the first bare `--` as the resume separator turned
+        // `--message --` into a valueless flag plus a resume command `--seq 2`.
+        let request = request(
+            "report-agent",
+            &[
+                "p1",
+                "--source",
+                "hook",
+                "--agent",
+                "claude",
+                "--state",
+                "idle",
+                "--message",
+                "--",
+                "--seq",
+                "2",
+                "--",
+                "claude",
+                "--resume",
+            ],
+        )
+        .unwrap();
+        let Method::PaneReportAgent(params) = request.method else {
+            panic!("expected pane.report_agent");
+        };
+        assert_eq!(params.message.as_deref(), Some("--"));
+        assert_eq!(params.seq, Some(2));
+        assert_eq!(
+            params.resume_argv,
+            Some(vec!["claude".to_owned(), "--resume".to_owned()])
+        );
     }
 }

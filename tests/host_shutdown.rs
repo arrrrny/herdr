@@ -106,8 +106,18 @@ fn api(socket: &Path, method: &str, params: serde_json::Value) -> serde_json::Va
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires dbus-daemon; exercises a private bus and disposable named server, not host shutdown"]
 async fn host_shutdown_saves_layout_before_releasing_delay_lock() {
+    // Exercises a private bus and a disposable named server; the host is never
+    // shut down. Skip where dbus-daemon is missing so this still runs in the
+    // Linux CI job instead of being silently excluded everywhere.
+    if Command::new("dbus-daemon")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: dbus-daemon is not installed");
+        return;
+    }
     let base = std::path::PathBuf::from(format!(
         "/var/tmp/hhs-{}-{}",
         std::process::id(),

@@ -309,7 +309,20 @@ impl ClientRenderState {
                 let patch = match (encoded, message) {
                     (Some(patch), _) => *patch,
                     (None, ServerMessage::PaneSurfacePatch(patch)) => patch,
-                    (None, _) => unreachable!("a plain semantic patch carries its pane patch"),
+                    // A plain semantic patch with no pane patch means the
+                    // prepared render and the semantic classification
+                    // disagreed. Dropping this frame costs one redundant
+                    // render; panicking here takes down the render stream over
+                    // an internal inconsistency that a future codec change
+                    // could introduce. Leaving `surface_revision` unadvanced
+                    // means the next frame re-patches against the same
+                    // baseline, so the drop is self-healing.
+                    (None, _) => {
+                        tracing::warn!(
+                            "dropping surface frame: prepared semantic patch carried no pane patch"
+                        );
+                        return;
+                    }
                 };
                 let surface = last_surface
                     .as_deref_mut()

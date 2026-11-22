@@ -75,6 +75,7 @@ enum ServerRuntimeStatus {
         version: Option<String>,
         protocol: Option<u32>,
         capabilities: Option<crate::api::schema::ServerCapabilities>,
+        node_id: Option<String>,
     },
     NotRunning,
 }
@@ -152,9 +153,11 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
             version,
             protocol,
             capabilities,
+            node_id,
         } => {
             println!("{indent}status: running");
             println!("{indent}version: {}", option_label(version.as_deref()));
+            println!("{indent}node_id: {}", option_label(node_id.as_deref()));
             println!(
                 "{indent}endpoint_compatible: {}",
                 endpoint_compatibility_label(capabilities.as_ref())
@@ -176,9 +179,10 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
     match super::target::server_status(&super::target::api_client()?) {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
-            version: status.version,
+            version: status.version.clone(),
             protocol: status.protocol,
-            capabilities: status.capabilities,
+            capabilities: status.capabilities.clone(),
+            node_id: status.node_id().map(str::to_owned),
         }),
         Err(err) if super::target::is_remote() => Err(super::target::remote_error(
             super::api_client_error_to_io(err),
@@ -264,6 +268,9 @@ struct ServerStatusJson {
     running: bool,
     version: Option<String>,
     protocol: Option<u32>,
+    /// Identity of the node the server answers for. `null` when the server is
+    /// not running, or when it predates node identity.
+    node_id: Option<String>,
     capabilities: Option<ServerCapabilitiesJson>,
     compatible: Option<bool>,
     endpoint_compatible: Option<bool>,
@@ -313,11 +320,13 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             version,
             protocol,
             capabilities,
+            node_id,
         } => ServerStatusJson {
             status: "running",
             running: true,
             version: version.clone(),
             protocol: *protocol,
+            node_id: node_id.clone(),
             capabilities: capabilities
                 .as_ref()
                 .map(|capabilities| ServerCapabilitiesJson {
@@ -344,6 +353,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
             running: false,
             version: None,
             protocol: None,
+            node_id: None,
             capabilities: None,
             compatible: None,
             endpoint_compatible: None,
@@ -418,9 +428,11 @@ mod tests {
         ServerRuntimeStatus::Running {
             version: version.map(str::to_owned),
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
+            node_id: Some("test-node".into()),
             capabilities: Some(crate::api::schema::ServerCapabilities {
                 live_handoff: true,
                 detached_server_daemon: true,
+                node_id: "test-node".into(),
                 endpoint_protocol_generation: endpoint_generation,
                 surface_interest: true,
                 health_check: true,
@@ -434,6 +446,7 @@ mod tests {
         let server = running_server(Some("test"), None);
         let value = serde_json::to_value(server_status_json(&server)).unwrap();
         assert_eq!(value["capabilities"]["ssh_agent_registration"], false);
+        assert_eq!(value["node_id"], "test-node");
     }
 
     #[test]

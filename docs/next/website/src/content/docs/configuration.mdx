@@ -426,7 +426,7 @@ rows = [
 ]
 ```
 
-The first matching rule wins. Its specified style fields override the occurrence's defaults; unspecified fields inherit them. If no rule matches, the defaults remain. Matching uses the full token value before display truncation. Set `hide = true` on a rule to remove the matching token and its separator; rows with no remaining tokens also disappear. For example, `{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }` hides the machine token when its label is exactly `Local`. This compares the label, not the connection type. With `hide = false` or omitted, the token stays visible. A rule with no overrides still stops matching and keeps the defaults.
+The first matching rule wins. Its specified style fields override the occurrence's defaults; unspecified fields inherit them. If no rule matches, the defaults remain. Matching uses the full token value before display truncation. Set `hide = true` on a rule to remove the matching token and its separator; rows with no remaining tokens also disappear. For example, `{ token = "machine", fg = "#61afef", rules = [{ equals = "Local", hide = true }] }` hides the machine token when its label is exactly `Local`. This compares the label, not the connection type. With `hide = false` or omitted, the token stays visible. A rule with no overrides still stops matching and keeps the defaults. The local machine's label defaults to `Local`; set `ui.local_machine_label` to show a different name.
 
 `equals`, `contains`, and `starts_with` take strings and are case-sensitive. Add `ignore_case = true` for ASCII case-insensitive matching; non-ASCII characters remain case-sensitive. Empty strings follow ordinary string matching: empty `equals` matches only an empty value, while empty `contains` or `starts_with` matches any present value.
 
@@ -561,6 +561,17 @@ startup_per_agent_delay_ms = 100
 Automatic restores start one agent at a time, 100 milliseconds apart by default, to reduce startup contention. The first eligible agent starts immediately. Set `startup_per_agent_delay_ms = 0` to disable spacing. Manual launches and explicit terminal attaches are unaffected. Restart the Herdr server to apply changes.
 
 Only panes with a valid native session reference from an official integration can resume; other panes restore as normal shells. See [Session state and restore](/docs/session-state/) for supported Agents and persistence behavior.
+
+## Agent launch priority
+
+Herdr can start Agents at a specific CPU scheduling priority:
+
+```toml
+[agent.start]
+nice = 19
+```
+
+The priority becomes part of the launch line, so the Agent inherits it before it forks any child and every descendant keeps it. The Agent ends up at exactly the configured priority: on macOS, whose `nice` adjusts the caller's priority instead of setting it, Herdr compensates for the priority the pane's shell already runs at. `herdr agent start --nice N` overrides this default for a single launch, and an explicit `--nice 0` overrides it as well. Values run from -20 (most aggressive) to 19 (most deferred); 0 leaves the launch line unchanged. Negative values need elevated privileges, and the priority is ignored on platforms without a Unix scheduling priority. An out-of-range value is reported as a configuration diagnostic and falls back to 0.
 
 ## IME cursor tracking
 

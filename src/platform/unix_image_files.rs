@@ -102,9 +102,19 @@ impl Ledger {
                 });
                 Some(path)
             }
-            Err(_) => {
-                // Do not repeatedly perform failing I/O on every frame.
-                self.disabled = true;
+            Err(error) => {
+                // Only give up permanently on errors that will not resolve on
+                // their own. Two local clients can transiently contend on the
+                // same staging file (flock -> EWOULDBLOCK/EAGAIN) or hit a
+                // momentary descriptor shortage, and disabling the whole
+                // session for the rest of its life because of one bad frame
+                // silently downgrades every later image to inline base64.
+                if is_transient_write_error(&error) {
+                    tracing::debug!(%error, "retrying image file write next frame");
+                } else {
+                    tracing::warn!(%error, "disabling image file transfer for this session");
+                    self.disabled = true;
+                }
                 None
             }
         }
@@ -354,9 +364,83 @@ fn private_directory(root: &Path) -> io::Result<PathBuf> {
     ))
 }
 
+/// True when a write failure is worth retrying on a later frame.
+///
+/// Staging an image file contends with the other local clients on the same
+/// machine, so `flock`/`open` can transiently report contention or a temporary
+/// resource shortage even though the very next frame would succeed. Those must
+/// not end file transfer for the session. Everything else — permissions, a
+/// read-only or full filesystem, a bad path — is a standing condition, and
+/// retrying it every frame would be the I/O storm the disabled flag exists to
+/// avoid.
+fn is_transient_write_error(error: &io::Error) -> bool {
+    // `std` already maps EAGAIN/EWOULDBLOCK to `WouldBlock` and EINTR to
+    // `Interrupted` on every unix target, so the raw codes are only needed for
+    // EMFILE/ENFILE, which arrive as uncategorized errors. Compared as a list
+    // rather than a pattern alternation because EAGAIN and EWOULDBLOCK are the
+    // same value on some targets, which an alternation rejects as unreachable.
+    const TRANSIENT_ERRNOS: [i32; 5] = [
+        libc::EAGAIN,
+        libc::EWOULDBLOCK,
+        libc::EINTR,
+        libc::EMFILE,
+        libc::ENFILE,
+    ];
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock
+            | io::ErrorKind::Interrupted
+            | io::ErrorKind::TimedOut
+            | io::ErrorKind::ResourceBusy
+            | io::ErrorKind::AlreadyExists
+    ) || error
+        .raw_os_error()
+        .is_some_and(|code| TRANSIENT_ERRNOS.contains(&code))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_write_errors_do_not_end_file_transfer() {
+        // A staging write that collides with another local client, or briefly
+        // runs out of descriptors, must not permanently disable file transfer
+        // for the whole session.
+        for error in [
+            io::Error::from(io::ErrorKind::WouldBlock),
+            io::Error::from(io::ErrorKind::Interrupted),
+            io::Error::from(io::ErrorKind::TimedOut),
+            io::Error::from(io::ErrorKind::ResourceBusy),
+            io::Error::from_raw_os_error(libc::EAGAIN),
+            io::Error::from_raw_os_error(libc::EINTR),
+            io::Error::from_raw_os_error(libc::EMFILE),
+            io::Error::from_raw_os_error(libc::ENFILE),
+        ] {
+            assert!(
+                is_transient_write_error(&error),
+                "expected transient: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn standing_write_errors_end_file_transfer() {
+        // A standing condition is retried on a later frame, so it must end
+        // transfer rather than performing failing I/O every frame.
+        for error in [
+            io::Error::from(io::ErrorKind::PermissionDenied),
+            io::Error::from(io::ErrorKind::NotFound),
+            io::Error::from(io::ErrorKind::InvalidInput),
+            io::Error::from_raw_os_error(libc::ENOSPC),
+            io::Error::from_raw_os_error(libc::EROFS),
+        ] {
+            assert!(
+                !is_transient_write_error(&error),
+                "expected standing: {error:?}"
+            );
+        }
+    }
 
     struct TestLedger {
         ledger: Ledger,

@@ -1051,6 +1051,23 @@ fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
     Ok(path.with_file_name(artifact_name))
 }
 
+// Existing configs can hold provider keys, so their staging file starts private
+// (mirroring `config_file::create_config_temporary`) and only receives the
+// original permissions after every access control has been prepared.
+fn write_letta_staged_file(path: &Path, contents: &[u8], private: bool) -> io::Result<()> {
+    use io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(if private { 0o600 } else { 0o666 });
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    options.open(path)?.write_all(contents)
+}
+
 pub(super) fn prepare_letta_install_file(
     target: &Path,
     contents: &[u8],
@@ -1074,7 +1091,7 @@ pub(super) fn prepare_letta_install_file(
     }
 
     let prepare_result = (|| {
-        fs::write(&staged, contents)?;
+        write_letta_staged_file(&staged, contents, preserve_permissions)?;
         if preserve_permissions && target.is_file() {
             fs::set_permissions(&staged, fs::metadata(target)?.permissions())?;
         }
@@ -1161,6 +1178,7 @@ fn ensure_letta_session_hook(hooks: &mut Map<String, Value>, command: String) ->
 
 pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
     let dir = letta_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     if !dir.is_dir() {
         return Err(io::Error::other(format!(
             "letta code config directory not found at {}. install letta code first",
@@ -1197,44 +1215,28 @@ pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
     let settings_contents = serde_json::to_string_pretty(&settings)?;
     let (hook_staged, hook_backup) =
         prepare_letta_install_file(&hook_path, LETTA_HOOK_ASSET.as_bytes(), true, false)?;
-    let (settings_staged, settings_backup) =
-        match prepare_letta_install_file(&settings_path, settings_contents.as_bytes(), false, true)
-        {
-            Ok(paths) => paths,
-            Err(err) => {
-                cleanup_letta_install_artifact(&hook_staged);
-                return Err(err);
-            }
-        };
-
     let hook_had_original = match publish_letta_install_file(&hook_path, &hook_staged, &hook_backup)
     {
         Ok(had_original) => had_original,
         Err(err) => {
             cleanup_letta_install_artifact(&hook_staged);
-            cleanup_letta_install_artifact(&settings_staged);
             return Err(err);
         }
     };
 
-    let settings_had_original =
-        match publish_letta_install_file(&settings_path, &settings_staged, &settings_backup) {
-            Ok(had_original) => had_original,
-            Err(err) => {
-                let err = combine_letta_install_errors(
-                    err,
-                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
-                );
-                cleanup_letta_install_artifact(&settings_staged);
-                return Err(err);
-            }
-        };
+    // Settings are user-owned config holding provider keys, so they go through the
+    // protected writer: a hard-linked config is rejected and a symlinked one keeps
+    // its link instead of being replaced by the staged file.
+    if let Err(err) = write_config(&settings_path, settings_contents.as_bytes()) {
+        let err = combine_letta_install_errors(
+            err,
+            rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+        );
+        return Err(err);
+    }
 
     if hook_had_original {
         cleanup_letta_install_artifact(&hook_backup);
-    }
-    if settings_had_original {
-        cleanup_letta_install_artifact(&settings_backup);
     }
 
     Ok(LettaInstallPaths {
@@ -1390,6 +1392,7 @@ pub(crate) fn uninstall_qwen() -> io::Result<QwenUninstallResult> {
 
 pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
     let dir = letta_dir()?;
+    check_config_targets(&dir, &["settings.json"])?;
     let hook_path = dir.join("hooks").join(LETTA_HOOK_INSTALL_NAME);
     let settings_path = dir.join("settings.json");
     let mut updated_settings = false;
@@ -1414,7 +1417,7 @@ pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
         }
 
         if updated_settings {
-            fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+            write_config(&settings_path, serde_json::to_string_pretty(&settings)?)?;
         }
     }
 

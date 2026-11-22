@@ -128,13 +128,15 @@ pub(super) fn render_mode_bar(
                         crate::api::schema::PaneCopySearchDirection::Forward => "/",
                         crate::api::schema::PaneCopySearchDirection::Backward => "?",
                     };
-                    buffer.set_stringn(bar.x, bar.y, " COPY ", usize::from(bar.width), mode_style);
-                    let prefix = 8.min(bar.width);
-                    if bar.width >= 8 {
-                        buffer.set_string(bar.x + 7, bar.y, marker, key);
+                    let label = " COPY ";
+                    let marker_col = label.len() as u16 + 1;
+                    let prefix = marker_col + 1;
+                    buffer.set_stringn(bar.x, bar.y, label, usize::from(bar.width), mode_style);
+                    if bar.width > marker_col {
+                        buffer.set_string(bar.x + marker_col, bar.y, marker, key);
                     }
                     let footer = "  enter search  esc cancel";
-                    let footer_width = if bar.width >= 50 {
+                    let footer_width = if bar.width >= prefix + footer.len() as u16 {
                         footer.len() as u16
                     } else {
                         0

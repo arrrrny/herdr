@@ -98,7 +98,7 @@ Raw socket method names use dot notation:
 | --- | --- |
 | Server | `ping`, `server.stop`, `server.reload_config`, `server.agent_manifests`, `server.reload_agent_manifests` |
 | Notification | `notification.show` |
-| Client | `client.window_title.set`, `client.window_title.clear` |
+| Client | `client.window_title.set`, `client.window_title.clear`, `client.activate_endpoint` |
 | Session | `session.snapshot` |
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
@@ -112,6 +112,8 @@ Raw socket method names use dot notation:
 | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
 
 `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls. If the resolved agent is already `blocked`, `agent.prompt` returns `agent_blocked` without sending input or starting the wait.
+
+`agent.start` accepts an optional `nice` parameter with the CPU scheduling priority of the launched agent, from -20 to 19. The priority becomes part of the launch line, so the agent and every child it forks inherit it. The agent ends up at exactly the requested priority, also on macOS, whose `nice` adjusts the caller's priority instead of setting it. When the parameter is absent, the `[agent.start] nice` configuration default applies; when both are absent, the launch line is unchanged. An out-of-range value is rejected with `invalid_agent_nice` and no agent is started. If the `nice` program is not on the search path, the launch fails with `agent_nice_unavailable` and no agent is started.
 
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
 
@@ -193,8 +195,9 @@ compatibility with older servers does not restore these public methods.
 can make the next decision without private layout state.
 
 `pane.process_info` returns the pane's shell pid, foreground process group id
-when available, and foreground processes with pid, name, argv/cmdline, and cwd
-when the platform exposes them.
+when available, and foreground processes with pid, name, argv/cmdline, cwd, and
+the CPU scheduling priority `nice` when the platform exposes them. `nice` is
+omitted when the operating system cannot report a priority for a process.
 
 `layout.export` returns a portable tab layout tree. Omit `tab_id` and `pane_id`
 to export the active tab, pass `tab_id` to export that tab, or pass `pane_id` to
@@ -340,6 +343,18 @@ Set or clear the foreground client's outer terminal window title:
 `client.window_title.clear` hands the title back to `ui.window_title`. The response is
 `type: "client_window_title"` with `changed` and reason `set`, `cleared`, or
 `no_foreground_client`.
+
+Ask a running client shell to switch to a saved machine and focus a target there:
+
+```json
+{"id":"req_activate","method":"client.activate_endpoint","params":{"machine":"mac-mini","target":{"kind":"pane","id":"w1D:p4Y"}}}
+```
+
+`machine` is a saved profile ID or unique label, and `target.kind` is `pane`, `tab`, or
+`workspace` with the machine's own public ID. The response is `type:
+"client_activate_endpoint"` with `delivered`: `true` only when a running client shell
+that understands the request received it, `false` when no such shell is attached — an
+automation caller then keeps today's server-side focus, as `herdr app focus` does.
 
 Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch.
 
@@ -831,6 +846,27 @@ Terminal-title changes can emit `pane.updated`, but spinner-only raw-title chang
 `pane.scroll_changed` is scoped to one `pane_id` and emits `pane_id`,
 `workspace_id`, and the current `scroll` metrics whenever Herdr observes a
 changed scroll snapshot.
+`pane.output_stream` streams one pane's output for embedded terminal clients. The
+subscription takes `pane_id` plus optional `source` (default `recent`, served
+`recent-unwrapped` so the client's own emulator owns wrapping), `lines` (default
+64, maximum 1000) as both the coalescing bound per chunk and the snapshot size,
+`format` (default `ansi`), `strip_ansi` (default `false`, so chunks keep their
+ANSI), and `since_sequence`. The first event is a `snapshot` carrying a full pane
+read; later events are `delta` chunks holding only the output produced since the
+previous event. Chunks are coalesced at the socket poll cadence, so a flooding
+pane produces bounded events instead of one per write. Each event carries a
+`sequence` that is monotonic per pane. When the read window no longer contains
+the client's text, for example after a clear or a full repaint, the event is a
+`resync` and its `text` is a fresh full read to resynchronize to. Reconnecting
+clients pass `since_sequence` with the last sequence they applied: Herdr replays
+the retained chunks after it, or answers `resync` when that history was dropped.
+Retained stream output is bounded per pane and in total, and a pane that floods
+cannot evict lifecycle events. Each event's `truncated` flag describes its own
+`text` window: `snapshot` and `resync` set it when the line cap clipped the full
+read, while a `delta` is complete relative to what the client already holds and
+always reports `false`. Stream events and `layout.updated` arrive on the
+same subscription connection, so a client rendering a pane can track its grid
+from `layout.updated` while it renders `pane.output_stream` chunks.
 Layout event subscriptions include `layout.updated`. The event carries the
 updated `PaneLayoutSnapshot` for one tab. Clients maintaining a cache with
 `session.snapshot` should use this event to refresh the affected layout through

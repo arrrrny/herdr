@@ -67,6 +67,7 @@ fn test_snapshot(boot_id: &str, revision: u64) -> crate::protocol::ClientShellSn
         panes: Vec::new(),
         agents: Vec::new(),
         commands: Vec::new(),
+        badges: Vec::new(),
     }
 }
 
@@ -138,6 +139,7 @@ fn workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
         id: id.into(),
         result: crate::api::schema::ResponseResult::WorkspaceInfo {
             workspace: crate::api::schema::WorkspaceInfo {
+                node_id: "test-node".into(),
                 workspace_id: workspace_id.into(),
                 number: 1,
                 label: workspace_id.into(),
@@ -433,6 +435,7 @@ fn activation_requires_an_exact_snapshot_surface_revision_pair() {
         panes: Vec::new(),
         agents: Vec::new(),
         commands: Vec::new(),
+        badges: Vec::new(),
     };
     assert_eq!(
         activation.receive_snapshot(&target, 7, &snapshot),

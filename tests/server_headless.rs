@@ -131,6 +131,12 @@ fn spawn_server(
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
+    // The fork's server binds a Ziki agent-state push listener on
+    // 127.0.0.1:7878 by default. Leave it at the default here and this
+    // isolated server races whatever herdr already holds that port on the
+    // machine, so unrelated tests in this file inherit a bind failure. An
+    // empty value disables the listener (resolved_http_push_listen_addr).
+    cmd.env("HERDR_API_LISTEN_ADDR", "");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -631,6 +637,14 @@ fn server_stop_request_logs_its_caller() {
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
+
+    // The harness holds the PTY master open but never reads it. On macOS the
+    // session-leader exit path drains the terminal output queue, so with an
+    // unread master the server blocks in exit past wait_for_exit's budget
+    // (the ready message sits in the queue). Closing the master marks the
+    // terminal gone, as server_survives_hangup_and_logs_why_it_stops does,
+    // which lets the exit complete promptly.
+    spawned.close_master();
 
     let mut stream = UnixStream::connect(&api_socket).unwrap();
     writeln!(

@@ -1,0 +1,266 @@
+{
+  "schema_version": "1.0",
+  "extensions": {
+    "bug": {
+      "version": "1.1.0",
+      "source": "local",
+      "manifest_hash": "sha256:c5b1a445c4a4cd0359885d0b1aeedebf6e7cf8dbd79cc3f5a231e34b36012c3e",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.bug.assess",
+          "speckit.bug.issue",
+          "speckit.bug.fetch",
+          "speckit.bug.fix",
+          "speckit.bug.pr",
+          "speckit.bug.test"
+        ],
+        "codex": [
+          "speckit.bug.assess",
+          "speckit.bug.issue",
+          "speckit.bug.fetch",
+          "speckit.bug.fix",
+          "speckit.bug.pr",
+          "speckit.bug.test"
+        ],
+        "pi": [
+          "speckit.bug.assess",
+          "speckit.bug.issue",
+          "speckit.bug.fetch",
+          "speckit.bug.fix",
+          "speckit.bug.pr",
+          "speckit.bug.test"
+        ],
+        "zed": [
+          "speckit.bug.assess",
+          "speckit.bug.issue",
+          "speckit.bug.fetch",
+          "speckit.bug.fix",
+          "speckit.bug.pr",
+          "speckit.bug.test"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:07.042752+00:00"
+    },
+    "chore": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:ae455f9153a5ec3d4d9fed41efb1c6c5c66f22e1dd43fbd3a98bb2d728fb65b6",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.chore.assess",
+          "speckit.chore.issue",
+          "speckit.chore.fetch",
+          "speckit.chore.implement",
+          "speckit.chore.pr"
+        ],
+        "codex": [
+          "speckit.chore.assess",
+          "speckit.chore.issue",
+          "speckit.chore.fetch",
+          "speckit.chore.implement",
+          "speckit.chore.pr"
+        ],
+        "pi": [
+          "speckit.chore.assess",
+          "speckit.chore.issue",
+          "speckit.chore.fetch",
+          "speckit.chore.implement",
+          "speckit.chore.pr"
+        ],
+        "zed": [
+          "speckit.chore.assess",
+          "speckit.chore.issue",
+          "speckit.chore.fetch",
+          "speckit.chore.implement",
+          "speckit.chore.pr"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:07.415023+00:00"
+    },
+    "gh-triage": {
+      "version": "1.2.0",
+      "source": "local",
+      "manifest_hash": "sha256:e4ee0f349a9c6f52a352717eae2556374a357aad7b85f7317f2c3aba86d3ade2",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.gh-triage.triage",
+          "speckit.gh-triage.feature"
+        ],
+        "codex": [
+          "speckit.gh-triage.triage",
+          "speckit.gh-triage.feature"
+        ],
+        "pi": [
+          "speckit.gh-triage.triage",
+          "speckit.gh-triage.feature"
+        ],
+        "zed": [
+          "speckit.gh-triage.triage",
+          "speckit.gh-triage.feature"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:07.777800+00:00"
+    },
+    "gym": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:d25a2852cc2fc7fa396412cf83c19e271668fc8a351c20dbf87d6eec8c211743",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.gym.init",
+          "speckit.gym.run",
+          "speckit.gym.warmup",
+          "speckit.gym.gate",
+          "speckit.gym.drop"
+        ],
+        "codex": [
+          "speckit.gym.init",
+          "speckit.gym.run",
+          "speckit.gym.warmup",
+          "speckit.gym.gate",
+          "speckit.gym.drop"
+        ],
+        "pi": [
+          "speckit.gym.init",
+          "speckit.gym.run",
+          "speckit.gym.warmup",
+          "speckit.gym.gate",
+          "speckit.gym.drop"
+        ],
+        "zed": [
+          "speckit.gym.init",
+          "speckit.gym.run",
+          "speckit.gym.warmup",
+          "speckit.gym.gate",
+          "speckit.gym.drop"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:08.138099+00:00"
+    },
+    "tdd": {
+      "version": "1.1.2",
+      "source": "local",
+      "manifest_hash": "sha256:39534941d021fbaec6e9bd6a7df182d6751ac807deb907f599850abdba3a5e74",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.tdd.setup",
+          "speckit.tdd.plan",
+          "speckit.tdd.run",
+          "speckit.tdd.verify"
+        ],
+        "codex": [
+          "speckit.tdd.setup",
+          "speckit.tdd.plan",
+          "speckit.tdd.run",
+          "speckit.tdd.verify"
+        ],
+        "pi": [
+          "speckit.tdd.setup",
+          "speckit.tdd.plan",
+          "speckit.tdd.run",
+          "speckit.tdd.verify"
+        ],
+        "zed": [
+          "speckit.tdd.setup",
+          "speckit.tdd.plan",
+          "speckit.tdd.run",
+          "speckit.tdd.verify"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:08.504478+00:00"
+    },
+    "spec-stats": {
+      "version": "1.2.0",
+      "source": "local",
+      "manifest_hash": "sha256:3281437807cdc2d09c972210e9a92d6e95aea65b38bd0f70619485a542a41175",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.spec-stats.report",
+          "speckit.spec-stats.open",
+          "speckit.spec-stats.not-green",
+          "speckit.spec-stats.reconcile",
+          "speckit.spec-stats.runs"
+        ],
+        "codex": [
+          "speckit.spec-stats.report",
+          "speckit.spec-stats.open",
+          "speckit.spec-stats.not-green",
+          "speckit.spec-stats.reconcile",
+          "speckit.spec-stats.runs"
+        ],
+        "pi": [
+          "speckit.spec-stats.report",
+          "speckit.spec-stats.open",
+          "speckit.spec-stats.not-green",
+          "speckit.spec-stats.reconcile",
+          "speckit.spec-stats.runs"
+        ],
+        "zed": [
+          "speckit.spec-stats.report",
+          "speckit.spec-stats.open",
+          "speckit.spec-stats.not-green",
+          "speckit.spec-stats.reconcile",
+          "speckit.spec-stats.runs"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:08.899934+00:00"
+    },
+    "git": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:89711dec9716473fba4afc54f7224bcb28ebd3c55fb5aaa30df854ab02b07a75",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "codex": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "pi": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ],
+        "zed": [
+          "speckit.git.feature",
+          "speckit.git.validate",
+          "speckit.git.remote",
+          "speckit.git.initialize",
+          "speckit.git.commit"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-10-07T07:55:09.335746+00:00"
+    }
+  }
+}

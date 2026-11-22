@@ -556,6 +556,7 @@ pub(crate) enum ServerEvent {
         surface_reuse: bool,
         surface_delta: bool,
         surface_scroll: bool,
+        activate_endpoint: bool,
         writer: ClientWriter,
     },
     /// A client sent an input message.
@@ -924,6 +925,7 @@ pub(crate) fn handle_client_handshake(
                     hello.surface_reuse,
                     hello.surface_delta,
                     hello.surface_scroll,
+                    hello.activate_endpoint,
                 )),
             )
         }
@@ -1025,6 +1027,7 @@ pub(crate) fn handle_client_handshake(
         surface_reuse,
         surface_delta,
         surface_scroll,
+        activate_endpoint,
     )) = shell_options
     {
         ServerEvent::ClientShellConnected {
@@ -1041,6 +1044,7 @@ pub(crate) fn handle_client_handshake(
             surface_reuse,
             surface_delta,
             surface_scroll,
+            activate_endpoint,
             writer,
         }
     } else {
@@ -1626,6 +1630,7 @@ mod tests {
             surface_codecs: vec![crate::protocol::endpoint::SURFACE_CODEC_V1.into()],
             input_codecs: vec![crate::protocol::endpoint::INPUT_CODEC_V1.into()],
             blob_codecs: vec![crate::protocol::endpoint::BLOB_CODEC_V1.into()],
+            activate_endpoint: false,
         };
         ClientMessage::EndpointControl {
             kind: ENDPOINT_HELLO_KIND.into(),
@@ -2358,6 +2363,7 @@ mod tests {
                 surface_reuse,
                 surface_delta,
                 surface_scroll,
+                activate_endpoint: false,
                 writer,
             } => {
                 assert!(!surface_reuse);

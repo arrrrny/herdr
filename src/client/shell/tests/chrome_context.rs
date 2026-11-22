@@ -87,9 +87,12 @@ fn focused_last_overflow_tab_shows_its_full_label() {
         let frame = state
             .compose(133, 20)
             .expect("reporter's overflowing strip");
+        // The strip must expose the whole tab strip width from the 133-column
+        // frame; this snapshot has no tab-bar status segments to reserve.
         assert_eq!(
             state.hits.new_tab.right() - state.hits.tab_scroll_left.x,
-            107
+            state.layout(133, 20).tab_bar.width,
+            "unexpected tab-strip viewport; the magic 107 assumes default chrome"
         );
         let rect = state
             .hits

@@ -5,8 +5,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
     ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_LOCAL_MACHINE_LABEL,
+    DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -262,6 +262,21 @@ pub struct TerminalConfig {
     pub kitty_graphics: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentConfig {
+    /// Defaults for freshly started agents.
+    pub start: AgentStartConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AgentStartConfig {
+    /// CPU scheduling priority applied to freshly started agents, from -20
+    /// (most aggressive) to 19 (most deferred). Zero disables the priority.
+    pub nice: i32,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
@@ -315,6 +330,7 @@ pub struct Config {
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
     pub session: SessionConfig,
+    pub agent: AgentConfig,
     pub server: ServerConfig,
     pub update: UpdateConfig,
     pub keys: KeysConfig,
@@ -998,6 +1014,8 @@ pub struct UiConfig {
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
     /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
     pub status_indicators: StatusIndicatorStyle,
+    /// Sidebar label for the local machine. Blank values fall back to "Local".
+    pub local_machine_label: String,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
@@ -1046,6 +1064,18 @@ pub struct ServerConfig {
     pub headless_cols: u16,
     /// Virtual terminal height used when no client is attached. Default: 40.
     pub headless_rows: u16,
+    /// Bind address ("host:port") for the HTTP agent-report push listener that
+    /// accepts `POST /api/v1/pane/report/agent` pushes (the Ziki contract's
+    /// authoritative state path; default `http://localhost:7878` on the client
+    /// side). Default: "127.0.0.1:7878". Set to "" to disable the listener;
+    /// a bind failure is non-fatal and only logs a warning, because agents fall
+    /// back to screen-marker and OSC-title detection.
+    pub agent_push_listen_addr: String,
+    /// Stable identity of this node, stamped onto every entity the server
+    /// reports. Configured, never derived from the hostname, so it survives a
+    /// hostname or address change. Blank resolves to the documented
+    /// `local` fallback, which is not a stable identity.
+    pub node_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1226,6 +1256,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
+            local_machine_label: DEFAULT_LOCAL_MACHINE_LABEL.to_owned(),
             sidebar: SidebarConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
@@ -1239,6 +1270,23 @@ impl UiConfig {
         self.mouse_scroll_lines
             .map(NonZeroUsize::get)
             .unwrap_or(DEFAULT_MOUSE_SCROLL_LINES)
+    }
+
+    /// Sidebar label for the local machine, trimmed. An empty or control-only
+    /// value keeps "Local"; control characters would break the single sidebar
+    /// row that renders it, so they are dropped like saved SSH labels reject them.
+    pub fn local_machine_label_trimmed(&self) -> String {
+        let label: String = self
+            .local_machine_label
+            .trim()
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        if label.is_empty() {
+            DEFAULT_LOCAL_MACHINE_LABEL.to_owned()
+        } else {
+            label
+        }
     }
 
     pub fn right_click_passthrough_modifiers(&self) -> Option<KeyModifiers> {
@@ -1318,6 +1366,9 @@ impl Default for ServerConfig {
             allow_unelevated_clients: false,
             headless_cols: crate::config::DEFAULT_HEADLESS_COLS,
             headless_rows: crate::config::DEFAULT_HEADLESS_ROWS,
+            agent_push_listen_addr: crate::api::http_push::DEFAULT_HTTP_PUSH_LISTEN_ADDR
+                .to_string(),
+            node_id: String::new(),
         }
     }
 }
@@ -1704,6 +1755,83 @@ sidebar_start_collapsed = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sidebar_start_collapsed);
+    }
+
+    #[test]
+    fn local_machine_label_defaults_to_local_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(default_config.ui.local_machine_label_trimmed(), "Local");
+
+        let toml = r#"
+[ui]
+local_machine_label = "i9"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.ui.local_machine_label_trimmed(), "i9");
+
+        let blank: Config = toml::from_str(
+            r#"
+[ui]
+local_machine_label = "   "
+"#,
+        )
+        .unwrap();
+        assert_eq!(blank.ui.local_machine_label_trimmed(), "Local");
+
+        let control: Config = toml::from_str(
+            r#"
+[ui]
+local_machine_label = "a\nb"
+"#,
+        )
+        .unwrap();
+        assert_eq!(control.ui.local_machine_label_trimmed(), "ab");
+    }
+
+    #[test]
+    fn node_id_defaults_to_the_documented_fallback_and_parses() {
+        let default_config = Config::default();
+        assert_eq!(
+            default_config.node_id().as_str(),
+            crate::node::FALLBACK_NODE_ID
+        );
+        assert!(!default_config.node_id().is_configured());
+        assert!(default_config.invalid_node_id_diagnostic().is_none());
+
+        let toml = r#"
+[server]
+node_id = "i7"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.node_id().as_str(), "i7");
+        assert!(config.node_id().is_configured());
+        assert!(config.invalid_node_id_diagnostic().is_none());
+
+        let blank: Config = toml::from_str(
+            r#"
+[server]
+node_id = "   "
+"#,
+        )
+        .unwrap();
+        assert_eq!(blank.node_id().as_str(), crate::node::FALLBACK_NODE_ID);
+        assert!(blank.invalid_node_id_diagnostic().is_none());
+    }
+
+    #[test]
+    fn unusable_node_id_is_reported_and_falls_back_instead_of_being_accepted() {
+        let toml = r#"
+[server]
+node_id = "two words"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        let diagnostic = config
+            .invalid_node_id_diagnostic()
+            .expect("an unusable node id is reported");
+        assert!(diagnostic.contains("server.node_id"), "{diagnostic}");
+        assert!(diagnostic.contains("local"), "{diagnostic}");
+        assert!(config.collect_diagnostics().contains(&diagnostic));
+        assert_eq!(config.node_id().as_str(), crate::node::FALLBACK_NODE_ID);
     }
 
     #[test]

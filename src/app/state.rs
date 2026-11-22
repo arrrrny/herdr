@@ -896,6 +896,10 @@ pub enum TabBarStatusSegment {
 }
 
 pub struct AppState {
+    /// In-memory (IPC-set) custom badges. File-sourced badges
+    /// (`run/badge.json`) are read fresh on every render and
+    /// merged with these (in-memory wins on key conflict).
+    pub badges: crate::badges::BadgeStore,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Terminal ids whose size is currently owned by a direct attach client.
@@ -930,6 +934,10 @@ pub struct AppState {
     pub outer_terminal_focus: Option<bool>,
     // Config
     pub prefix_keys: Vec<(KeyCode, KeyModifiers)>,
+    /// Identity of the node this server answers for. Stamped onto every entity
+    /// the API reports, so a consumer holding a pane, tab, workspace or agent
+    /// id can tell which node it came from without a second lookup.
+    pub node_id: crate::node::NodeId,
     /// Virtual terminal size (columns, rows) used when no client is attached.
     pub(crate) headless_size: (u16, u16),
     pub agent_panel_sort: AgentPanelSort,
@@ -957,6 +965,8 @@ pub struct AppState {
     pub cjk_ime_cursor_shape: u8,
     pub kitty_graphics_enabled: bool,
     pub default_shell: String,
+    /// Default CPU scheduling priority for freshly started agents.
+    pub agent_start_nice: i32,
     pub shell_mode: crate::config::ShellModeConfig,
     pub new_terminal_cwd: NewTerminalCwdConfig,
     pub pane_scrollback_limit_bytes: usize,
@@ -1144,6 +1154,8 @@ impl AppState {
     /// Create an AppState for testing — no channels, no PTYs.
     pub fn test_new() -> Self {
         Self {
+            node_id: crate::node::NodeId::fallback(),
+            badges: crate::badges::BadgeStore::new(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -1194,6 +1206,7 @@ impl AppState {
             cjk_ime_cursor_shape: 2, // steady_block
             kitty_graphics_enabled: false,
             default_shell: String::new(),
+            agent_start_nice: 0,
             shell_mode: crate::config::ShellModeConfig::Auto,
             new_terminal_cwd: NewTerminalCwdConfig::Follow,
             pane_scrollback_limit_bytes: crate::config::DEFAULT_SCROLLBACK_LIMIT_BYTES,
