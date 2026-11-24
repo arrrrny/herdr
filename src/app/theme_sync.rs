@@ -60,7 +60,7 @@ impl App {
 
         // A foreground switch must install both facts before releasing the outgoing hold.
         let released = self.release_host_appearance_if_ready(Instant::now());
-        let repainted = appearance_changed && self.refresh_effective_app_theme();
+        let repainted = (appearance_changed || theme_changed) && self.refresh_effective_app_theme();
         theme_changed || released || repainted
     }
 
@@ -100,6 +100,7 @@ impl App {
         let (palette, theme_name) = super::resolve_effective_theme(
             &self.state.theme_runtime,
             self.state.host_terminal_appearance,
+            Some(&self.state.host_terminal_theme),
         );
         if self.state.theme_name == theme_name && self.state.palette == palette {
             return false;
