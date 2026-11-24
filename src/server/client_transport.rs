@@ -46,6 +46,19 @@ const OBSERVER_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum input payload size (bytes) for a single `ClientMessage::Input`.
 const MAX_INPUT_PAYLOAD: usize = 1024 * 1024; // 1 MB
+/// Outbound byte cap for the reliable control queue of a single client.
+///
+/// Sized for headroom over one full snapshot bundle plus a 16 MiB clipboard
+/// image. Two facts a caller must not misread:
+///
+/// - Overflow is **fatal for this client's connection**, not a drop: when the
+///   cap is exceeded `disconnect_overflow` calls `close_writer` and shuts the
+///   transport down, so the client has to reconnect. This is the opposite of
+///   the render lane, which silently drops frames under pressure. Reading a
+///   `SendError` from `send_control` as "retry later" is wrong.
+/// - The cap is **per client**, and the server's client count is unbounded
+///   (`clients: HashMap<u64, ClientConnection>` in `src/server/headless.rs`),
+///   so the server-wide worst case is `N × this value`.
 const MAX_CLIENT_CONTROL_BYTES: usize = 64 * 1024 * 1024;
 const MAX_CLIENT_SHELL_DIMENSION: u16 = 4096;
 const MAX_CLIENT_SHELL_CELLS: u32 = 1_000_000;
